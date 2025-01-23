@@ -203,7 +203,7 @@ func main() {
 		}
 
 		// Generate some input & throw it into the input buffer
-		inputSize := 50 * 1024 * 1024
+		inputSize := 50 * 1024 * 1024 // 50 MiB
 		input := generatePseudoRandomData(inputSize)
 		copy(shmBuffer, input)
 
