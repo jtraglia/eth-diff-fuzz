@@ -194,8 +194,8 @@ func main() {
 		mu.Lock()
 		numClients := len(clients)
 		mu.Unlock()
-		if numClients == 0 {
-			fmt.Println("No clients yet...")
+		if numClients < 2 {
+			fmt.Println("Waiting for 2+ clients...")
 			time.Sleep(1 * time.Second)
 			count = 0
 			totalTime = 0
@@ -203,12 +203,13 @@ func main() {
 		}
 
 		// Generate some input & throw it into the input buffer
-		inputSize := 1 * 1024 * 1024
+		inputSize := 50 * 1024 * 1024
 		input := generatePseudoRandomData(inputSize)
 		copy(shmBuffer, input)
 
 		mu.Lock()
 		wg := &sync.WaitGroup{}
+		muResult := &sync.Mutex{}
 		results := make(map[string][]byte)
 		for _, client := range clients {
 			wg.Add(1)
@@ -228,7 +229,7 @@ func main() {
 					return
 				}
 
-				// Wait for a response
+				// Wait for a response size
 				responseSizeBytes := make([]byte, 4)
 				_, err = client.Conn.Read(responseSizeBytes)
 				if err != nil {
@@ -236,10 +237,12 @@ func main() {
 					delete(clients, client.Name)
 					return
 				}
-
-				// Decode the received size
 				responseSize := binary.BigEndian.Uint32(responseSizeBytes)
+
+				// Write the response to the results map
+				muResult.Lock()
 				results[client.Name] = shmBuffer[:responseSize]
+				muResult.Unlock()
 			}(client)
 		}
 		wg.Wait()

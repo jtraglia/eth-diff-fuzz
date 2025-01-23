@@ -1,7 +1,5 @@
 use byteorder::{BigEndian, ByteOrder};
 use libc::{shmat, shmget, shmdt, shmctl, MAP_FAILED, S_IRUSR, S_IWUSR, IPC_RMID, c_int, size_t};
-use sha2::Digest;
-use sha2::Sha256;
 use std::io::ErrorKind;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
@@ -10,6 +8,7 @@ use std::slice;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
+use ring::digest;
 
 const SOCKET_NAME: &str = "/tmp/eth-cl-fuzz";
 const SHM_INPUT_KEY: i32 = 0;
@@ -65,12 +64,11 @@ fn main() {
 
                 // Process the input in some way...
                 let start_time = Instant::now();
-                let mut hasher = Sha256::new();
-                hasher.update(input);
-                let result = hasher.finalize();
-                let output_size = result.len();
+                let result = digest::digest(&digest::SHA256, input);
+                let output_size = digest::SHA256.output_len;;
                 let output: &mut [u8] = unsafe { slice::from_raw_parts_mut(shm_output_addr as *mut u8, output_size) };
-                output.copy_from_slice(&result);
+                //output.copy_from_slice(&result);
+                output.copy_from_slice(result.as_ref());
                 let elapsed_time = start_time.elapsed();
                 println!("Processing time: {:.2?}", elapsed_time);
 
