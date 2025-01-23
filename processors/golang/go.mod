@@ -1,4 +1,4 @@
-module driver
+module processor
 
 go 1.23.5
 
