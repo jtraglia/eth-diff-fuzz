@@ -1,10 +1,12 @@
 package main
 
 import (
+	"crypto/rand"
 	"fmt"
 	"net"
 	"os"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -22,8 +24,9 @@ const (
 // generatePseudoRandomData generates pseudo-random data for testing.
 func generatePseudoRandomData(shmSize int) []byte {
 	data := make([]byte, shmSize)
-	for i := 0; i < shmSize; i++ {
-		data[i] = byte(i % 256)
+	_, err := rand.Read(data)
+	if err != nil {
+		panic("Failed to generate random data")
 	}
 	return data
 }
@@ -99,7 +102,7 @@ func main() {
 	}
 
 	// Cast the address to a byte slice
-	data := (*[shmSize]byte)(unsafe.Pointer(shmAddr))[:shmSize:shmSize]
+	sharedMemoryBuffer := (*[shmSize]byte)(unsafe.Pointer(shmAddr))[:shmSize:shmSize]
 	defer func() {
 		shmdt(shmAddr)               // Detach from shared memory
 		shmctl(shmID, IPC_RMID, nil) // Remove shared memory
@@ -122,18 +125,23 @@ func main() {
 	}
 	defer conn.Close()
 
-	for {
-		// Generate pseudo-random data
-		dataSize := 10 * 1024 * 1024 // 10 MiB
-		randomData := generatePseudoRandomData(dataSize)
-		copy(data, randomData)
-		fmt.Printf("[driver] Wrote %d MiB of pseudo-random data\n", dataSize/(1024*1024))
+	const maxIterations = 10
+	var durations [maxIterations]time.Duration // Circular buffer for last 10 durations
+	var total time.Duration                    // Sum of durations
+	var count int                              // Number of iterations processed so far
 
-		// Send the data size to the processor
-		fmt.Println("[driver] Sending data size to processor...")
+	for {
+		// Generate some random preState
+		dataSize := 50 * 1024 * 1024 // 10 MiB
+		preState := generatePseudoRandomData(dataSize)
+
+		start := time.Now()
+		copy(sharedMemoryBuffer, preState)
+
+		// Send the preState size to the processor
 		_, err = conn.Write([]byte(fmt.Sprintf("%d", dataSize)))
 		if err != nil {
-			fmt.Printf("Error sending message to processor: %v\n", err)
+			fmt.Printf("Error sending preState size to processor: %v\n", err)
 			os.Exit(1)
 		}
 
@@ -141,10 +149,41 @@ func main() {
 		buffer := make([]byte, 32)
 		n, err := conn.Read(buffer)
 		if err != nil {
-			fmt.Printf("Error reading message from processor: %v\n", err)
+			fmt.Printf("Error reading postState size from processor: %v\n", err)
 			os.Exit(1)
 		}
 		responseSize := string(buffer[:n])
-		fmt.Printf("[driver] Received response from processor: %s bytes processed\n", responseSize)
+
+		duration := time.Since(start)
+		index := count % maxIterations
+		total -= durations[index]
+		durations[index] = duration
+		total += duration
+
+		// Calculate the running average
+		iterations := maxIterations
+		if count < maxIterations {
+			iterations = count + 1
+		}
+		average := total / time.Duration(iterations)
+		if count&(count-1) == 0 {
+			fmt.Printf("Iteration: %d, Average Time: %v\n", count, average)
+
+			fmt.Print("preState: ")
+			for _, b := range preState[:8] {
+				fmt.Printf("%02x", b)
+			}
+			fmt.Println()
+
+			fmt.Print("postState: ")
+			for _, b := range sharedMemoryBuffer[:8] {
+				fmt.Printf("%02x", b)
+			}
+			fmt.Println()
+
+			fmt.Println("Response length:", responseSize)
+		}
+
+		count++
 	}
 }

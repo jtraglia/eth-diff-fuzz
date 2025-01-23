@@ -5,6 +5,7 @@ use std::ptr;
 use std::slice;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 const SHM_KEY: i32 = 0x1234;
 const SHM_SIZE: usize = 100 * 1024 * 1024;
@@ -53,9 +54,12 @@ fn main() {
 
         let data: &mut [u8] = unsafe { slice::from_raw_parts_mut(shm_addr as *mut u8, data_size) };
 
-        // Process the data (reverse it)
+
+        let start_time = Instant::now();
         println!("[proc-rust] Reversing the data...");
         data.reverse();
+        let elapsed_time = start_time.elapsed();
+        println!("[proc-rust] Processing time: {:.2?}", elapsed_time);
 
         // Send the size of the processed data back to driver
         let response = format!("{}", data_size);
