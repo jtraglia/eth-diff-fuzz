@@ -194,7 +194,7 @@ func main() {
 		mu.Lock()
 		numClients := len(clients)
 		mu.Unlock()
-		if numClients < 2 {
+		if numClients < 1 {
 			fmt.Println("Waiting for 2+ clients...")
 			time.Sleep(1 * time.Second)
 			count = 0
@@ -233,7 +233,9 @@ func main() {
 				responseSizeBytes := make([]byte, 4)
 				_, err = client.Conn.Read(responseSizeBytes)
 				if err != nil {
-					fmt.Printf("Error reading response from client %s: %v\n", client.Name, err)
+					if !strings.Contains(err.Error(), "EOF") {
+						fmt.Printf("Error reading response from client %s: %v\n", client.Name, err)
+					}
 					delete(clients, client.Name)
 					return
 				}
