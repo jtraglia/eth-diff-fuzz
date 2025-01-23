@@ -6,17 +6,24 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/gen2brain/shm"
 )
 
 const (
-	shmKey     = 0x1234            // Shared memory key
-	shmSize    = 100 * 1024 * 1024 // Shared memory size (100 MiB)
-	shmPerm    = 0666
-	socketPath = "/tmp/eth_cl_fuzz_rust_socket"
+	shmKey  = 0x1234            // Shared memory key
+	shmSize = 100 * 1024 * 1024 // Shared memory size (100 MiB)
+	shmPerm = 0666
+
+	socketName = "/tmp/eth-cl-fuzz"
 )
+
+type Client struct {
+	Name string
+	Conn net.Conn
+}
 
 // generatePseudoRandomData generates pseudo-random data for testing.
 func generatePseudoRandomData(shmSize int) []byte {
@@ -56,26 +63,8 @@ func main() {
 		fmt.Printf("Error attaching to shared memory: %v\n", err)
 		os.Exit(1)
 	}
-
 	defer shm.Dt(shmBuffer)
 	defer shm.Ctl(shmId, shm.IPC_RMID, nil)
-
-	// Create and listen on a Unix domain socket
-	os.Remove(socketPath) // Clean up any existing socket
-	listener, err := net.Listen("unix", socketPath)
-	if err != nil {
-		fmt.Printf("Error creating Unix domain socket: %v\n", err)
-		os.Exit(1)
-	}
-	defer listener.Close()
-
-	fmt.Println("[driver] Waiting for processor to connect...")
-	conn, err := listener.Accept()
-	if err != nil {
-		fmt.Printf("Error accepting connection: %v\n", err)
-		os.Exit(1)
-	}
-	defer conn.Close()
 
 	var totalTime time.Duration
 	var count int
@@ -84,43 +73,108 @@ func main() {
 	defer ticker.Stop()
 	go func() {
 		for range ticker.C {
-			average := totalTime / time.Duration(count)
-			fmt.Printf("[driver] Fuzzing Time: %v, Iterations: %v, Average Iteration Time: %v\n", totalTime, count, average)
+			if count != 0 {
+				average := totalTime / time.Duration(count)
+				fmt.Printf("[driver] Fuzzing Time: %v, Iterations: %v, Average Iteration Time: %v\n", totalTime, count, average)
+			}
 		}
 	}()
 
+	os.Remove(socketName)
+	registrationListener, err := net.Listen("unix", socketName)
+	if err != nil {
+		fmt.Printf("Error creating Unix domain socket: %v\n", err)
+		os.Exit(1)
+	}
+	defer registrationListener.Close()
+
+	fmt.Println("[Server] IPC server started. Waiting for clients...")
+
+	clients := make(map[string]*Client)
+	mu := &sync.Mutex{}
+
+	go func() {
+		for {
+			conn, err := registrationListener.Accept()
+			if err != nil {
+				fmt.Printf("Error accepting connection: %v\n", err)
+				os.Exit(1)
+			}
+			//defer conn.Close()
+
+			clientNameBytes := make([]byte, 32)
+			n, err := conn.Read(clientNameBytes)
+			if err != nil {
+				fmt.Printf("Error reading client name: %v\n", err)
+				os.Exit(1)
+			}
+			clientName := string(clientNameBytes[:n])
+
+			mu.Lock()
+			if _, exists := clients[clientName]; !exists {
+				clients[clientName] = &Client{Name: clientName, Conn: conn}
+				fmt.Printf("[Server] Registered new client: %s\n", clientName)
+			}
+			mu.Unlock()
+		}
+	}()
+
+	messageID := 0
 	for {
-		// Generate some random preState
-		dataSize := 50 * 1024 * 1024 // 10 MiB
-		preState := generatePseudoRandomData(dataSize)
+		if len(clients) == 0 {
+			fmt.Println("[driver] No clients yet...")
+			time.Sleep(1 * time.Second)
+			continue
+		}
 
 		start := time.Now()
+		dataSize := 50 * 1024 * 1024
+		preState := generatePseudoRandomData(dataSize)
 		copy(shmBuffer, preState)
 
-		// Send the preState size to the processor
-		sizeBytes := make([]byte, 4)
-		binary.BigEndian.PutUint32(sizeBytes, uint32(dataSize))
-		_, err = conn.Write(sizeBytes)
-		if err != nil {
-			fmt.Printf("Error sending preState size to processor: %v\n", err)
-			os.Exit(1)
-		}
+		messageID++
 
-		// Wait for a response from processor
-		buffer := make([]byte, 4)
-		n, err := conn.Read(buffer)
-		if err != nil {
-			fmt.Printf("Error reading postState size from processor: %v\n", err)
-			os.Exit(1)
-		}
-		if n != 4 {
-			fmt.Printf("Expected 4 bytes, got %d\n", n)
-			os.Exit(1)
-		}
+		mu.Lock()
+		wg := &sync.WaitGroup{}
+		for _, client := range clients {
+			wg.Add(1)
+			go func(client *Client) {
+				defer wg.Done()
 
-		// Decode the received size
-		responseSize := binary.BigEndian.Uint32(buffer)
-		_ = shmBuffer[:responseSize]
+				// Send the message to the client
+				sizeBytes := make([]byte, 4)
+				binary.BigEndian.PutUint32(sizeBytes, uint32(dataSize))
+				_, err := client.Conn.Write([]byte(sizeBytes))
+				if err != nil {
+					fmt.Printf("[Server] Error writing to client %s: %v\n", client.Name, err)
+					mu.Lock()
+					delete(clients, client.Name)
+					mu.Unlock()
+					return
+				}
+
+				// Wait for a response
+				responseSizeBytes := make([]byte, 4)
+				n, err := client.Conn.Read(responseSizeBytes)
+				if err != nil {
+					fmt.Printf("[Server] Error reading response from client %s: %v\n", client.Name, err)
+					mu.Lock()
+					delete(clients, client.Name)
+					mu.Unlock()
+					return
+				}
+				if n != 4 {
+					fmt.Printf("Expected 4 bytes, got %d\n", n)
+					os.Exit(1)
+				}
+
+				// Decode the received size
+				responseSize := binary.BigEndian.Uint32(responseSizeBytes)
+				_ = shmBuffer[:responseSize]
+			}(client)
+		}
+		mu.Unlock()
+		wg.Wait()
 
 		duration := time.Since(start)
 		totalTime += duration

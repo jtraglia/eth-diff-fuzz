@@ -10,12 +10,13 @@ use byteorder::{BigEndian, ByteOrder};
 
 const SHM_KEY: i32 = 0x1234;
 const SHM_SIZE: usize = 100 * 1024 * 1024;
-const SOCKET_PATH: &str = "/tmp/eth_cl_fuzz_rust_socket";
+const SOCKET_NAME: &str = "/tmp/eth-cl-fuzz";
 
 fn main() {
     // Connect to the Unix domain socket
     println!("[proc-rust] Connecting to driver...");
-    let mut stream = UnixStream::connect(SOCKET_PATH).expect("Failed to connect to driver");
+    let mut stream = UnixStream::connect(SOCKET_NAME).expect("Failed to connect to driver");
+    stream.write_all(b"lighthouse").expect("Failed to send name to driver");
 
     // Attach to the shared memory segment
     let shm_id = unsafe { shmget(SHM_KEY, SHM_SIZE as size_t, (S_IRUSR | S_IWUSR) as c_int) };
