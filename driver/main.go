@@ -130,7 +130,8 @@ func main() {
 		for range ticker.C {
 			if count != 0 {
 				average := totalTime / time.Duration(count)
-				fmt.Printf("Fuzzing Time: %v, Iterations: %v, Average Iteration Time: %v\n", totalTime, count, average)
+				fmt.Printf("Fuzzing Time: %s, Iterations: %v, Average Iteration: %s\n",
+					totalTime.Round(time.Second), count, average.Round(time.Millisecond))
 			}
 		}
 	}()
