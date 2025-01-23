@@ -11,39 +11,38 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
-const SHM_KEY: i32 = 0;
-const SHM_SIZE: usize = 100 * 1024 * 1024;
 const SOCKET_NAME: &str = "/tmp/eth-cl-fuzz";
+const SHM_INPUT_KEY: i32 = 0;
+const SHM_MAX_SIZE: usize = 100 * 1024 * 1024; // 100 MiB
 
 fn main() {
-    // Connect to the Unix domain socket
     println!("Connecting to driver...");
     let mut stream = UnixStream::connect(SOCKET_NAME).expect("Failed to connect to driver");
-    stream.write_all(b"lighthouse").expect("Failed to send name to driver");
+    stream.write_all(b"rust").expect("Failed to send name to driver");
 
-    println!("Attaching to input shared memory: {}", SHM_KEY);
-    let shm_read_id = unsafe { shmget(SHM_KEY, SHM_SIZE as size_t, (S_IRUSR | S_IWUSR) as c_int) };
-    if shm_read_id == -1 {
-        panic!("Error getting shared memory segment");
+    // Attach to the input buffer
+    let shm_input_id = unsafe { shmget(SHM_INPUT_KEY, SHM_MAX_SIZE as size_t, (S_IRUSR | S_IWUSR) as c_int) };
+    if shm_input_id == -1 {
+        panic!("Error getting input shared memory segment");
+    }
+    let shm_input_addr = unsafe { shmat(shm_input_id, ptr::null(), 0) };
+    if shm_input_addr == MAP_FAILED {
+        panic!("Error attaching to input shared memory");
     }
 
-    let shm_read_addr = unsafe { shmat(shm_read_id, ptr::null(), 0) };
-    if shm_read_addr == MAP_FAILED {
-        panic!("Error attaching to shared memory");
-    }
+    // Get the output key from the driver
+    let mut shm_output_key_buffer = [0u8; 4];
+    stream.read_exact(&mut shm_output_key_buffer).expect("Failed to read key from socket");
+    let shm_output_key = BigEndian::read_u32(&shm_output_key_buffer) as i32;
 
-    let mut shm_key_buffer = [0u8; 4];
-    stream.read_exact(&mut shm_key_buffer).expect("Failed to read key from socket");
-    let shm_key = BigEndian::read_u32(&shm_key_buffer) as i32;
-
-    println!("Attaching to output shared memory: {}", shm_key);
-    let shm_write_id = unsafe { shmget(shm_key, SHM_SIZE as size_t, (S_IRUSR | S_IWUSR) as c_int) };
-    if shm_write_id == -1 {
-        panic!("Error getting shared memory segment");
+    // Attach to the output buffer
+    let shm_output_id = unsafe { shmget(shm_output_key, SHM_MAX_SIZE as size_t, (S_IRUSR | S_IWUSR) as c_int) };
+    if shm_output_id == -1 {
+        panic!("Error getting output shared memory segment");
     }
-    let shm_write_addr = unsafe { shmat(shm_write_id, ptr::null(), 0) };
-    if shm_write_addr == MAP_FAILED {
-        panic!("Error attaching to shared memory");
+    let shm_output_addr = unsafe { shmat(shm_output_id, ptr::null(), 0) };
+    if shm_output_addr == MAP_FAILED {
+        panic!("Error attaching to output shared memory");
     }
 
     // Create a Ctrl+C handler
@@ -62,7 +61,7 @@ fn main() {
             Ok(_) => {
                 // Get the input
                 let input_size = BigEndian::read_u32(&input_size_buffer) as usize;
-                let input: &[u8] = unsafe { slice::from_raw_parts(shm_read_addr as *const u8, input_size) };
+                let input: &[u8] = unsafe { slice::from_raw_parts(shm_input_addr as *const u8, input_size) };
 
                 // Process the input in some way...
                 let start_time = Instant::now();
@@ -70,7 +69,7 @@ fn main() {
                 hasher.update(input);
                 let result = hasher.finalize();
                 let output_size = result.len();
-                let output: &mut [u8] = unsafe { slice::from_raw_parts_mut(shm_write_addr as *mut u8, output_size) };
+                let output: &mut [u8] = unsafe { slice::from_raw_parts_mut(shm_output_addr as *mut u8, output_size) };
                 output.copy_from_slice(&result);
                 let elapsed_time = start_time.elapsed();
                 println!("Processing time: {:.2?}", elapsed_time);
@@ -84,7 +83,8 @@ fn main() {
                 }
             }
             Err(e) => {
-                if e.kind() == ErrorKind::UnexpectedEof || e.kind() == ErrorKind::ConnectionReset {
+                // Print a nice message if the driver disconnects
+                if e.kind() == ErrorKind::UnexpectedEof {
                     println!("Driver disconnected");
                 } else {
                     println!("Failed to read size from socket: {}", e);
@@ -95,10 +95,10 @@ fn main() {
     }
 
     unsafe {
-        shmdt(shm_read_addr);
-        shmctl(shm_read_id, IPC_RMID, ptr::null_mut());
-        shmdt(shm_write_addr);
-        shmctl(shm_write_id, IPC_RMID, ptr::null_mut());
+        shmdt(shm_input_addr);
+        shmctl(shm_input_id, IPC_RMID, ptr::null_mut());
+        shmdt(shm_output_addr);
+        shmctl(shm_output_id, IPC_RMID, ptr::null_mut());
     };
 
     println!("Goodbye!");

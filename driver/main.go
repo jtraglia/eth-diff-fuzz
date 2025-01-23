@@ -16,13 +16,13 @@ import (
 )
 
 const (
-	shmDriverKey = 1000
-	shmSize      = 100 * 1024 * 1024
-	shmPerm      = 0666
+	socketName = "/tmp/eth-cl-fuzz"
 
 	maxClientNameLength = 32
 
-	socketName = "/tmp/eth-cl-fuzz"
+	shmDriverKey = 1000
+	shmMaxSize   = 100 * 1024 * 1024 // 100 MiB
+	shmPerm      = 0666
 )
 
 type Client struct {
@@ -33,8 +33,8 @@ type Client struct {
 }
 
 // generatePseudoRandomData generates pseudo-random data for testing.
-func generatePseudoRandomData(shmSize int) []byte {
-	data := make([]byte, shmSize)
+func generatePseudoRandomData(shmMaxSize int) []byte {
+	data := make([]byte, shmMaxSize)
 	_, err := rand.Read(data)
 	if err != nil {
 		panic("Failed to generate random data")
@@ -67,7 +67,7 @@ func cleanupSharedMemory(clients map[string]*Client, shmId int, shmBuffer []byte
 // newSharedMemory creates a new shared memory segment.
 func newSharedMemory(shmKey int) (int, []byte, error) {
 	// Create the shared memory segment
-	shmId, err := shm.Get(shmKey, shmSize, shmPerm|shm.IPC_CREAT|shm.IPC_EXCL)
+	shmId, err := shm.Get(shmKey, shmMaxSize, shmPerm|shm.IPC_CREAT|shm.IPC_EXCL)
 	if err != nil {
 		fmt.Printf("Error creating shared memory: %v\n", err)
 		return 0, nil, err
