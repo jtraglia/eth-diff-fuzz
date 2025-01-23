@@ -1,4 +1,8 @@
+use byteorder::{BigEndian, ByteOrder};
 use libc::{shmat, shmget, shmdt, shmctl, MAP_FAILED, S_IRUSR, S_IWUSR, IPC_RMID, c_int, size_t};
+use sha2::Digest;
+use sha2::Sha256;
+use std::io::ErrorKind;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::ptr;
@@ -6,9 +10,6 @@ use std::slice;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
-use byteorder::{BigEndian, ByteOrder};
-use sha2::Sha256;
-use sha2::Digest;
 
 const SHM_KEY: i32 = 0;
 const SHM_SIZE: usize = 100 * 1024 * 1024;
@@ -83,26 +84,22 @@ fn main() {
                 }
             }
             Err(e) => {
-                // Break the loop if the driver stops or an error occurs
-                println!("Failed to read size from socket: {}", e);
+                if e.kind() == ErrorKind::UnexpectedEof || e.kind() == ErrorKind::ConnectionReset {
+                    println!("Driver disconnected");
+                } else {
+                    println!("Failed to read size from socket: {}", e);
+                }
                 break;
             }
         }
     }
 
-    // Code to execute when the program exits
-    println!("Exiting gracefully...");
-
-    // Detach from shared memory
     unsafe {
         shmdt(shm_read_addr);
-        if shmctl(shm_read_id, IPC_RMID, ptr::null_mut()) == -1 {
-            eprintln!("Failed to remove shared memory (read) with ID: {}", shm_read_id);
-        }
-
+        shmctl(shm_read_id, IPC_RMID, ptr::null_mut());
         shmdt(shm_write_addr);
-        if shmctl(shm_write_id, IPC_RMID, ptr::null_mut()) == -1 {
-            eprintln!("Failed to remove shared memory (write) with ID: {}", shm_write_id);
-        }
+        shmctl(shm_write_id, IPC_RMID, ptr::null_mut());
     };
+
+    println!("Goodbye!");
 }

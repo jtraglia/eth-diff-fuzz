@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -44,22 +45,20 @@ func generatePseudoRandomData(shmSize int) []byte {
 // cleanupSharedMemory detaches and removes all shared memories.
 func cleanupSharedMemory(clients map[string]*Client, shmId int, shmBuffer []byte) {
 	// Cleanup driver shared memory
-	fmt.Println("[cleanup] Detaching and removing driver shared memory...")
 	if err := shm.Dt(shmBuffer); err != nil {
-		fmt.Printf("[ERROR] Failed to detach driver shared memory: %v\n", err)
+		fmt.Printf("Failed to detach driver shared memory: %v\n", err)
 	}
 	if _, err := shm.Ctl(shmId, shm.IPC_RMID, nil); err != nil {
-		fmt.Printf("[ERROR] Failed to remove driver shared memory: %v\n", err)
+		fmt.Printf("Failed to remove driver shared memory: %v\n", err)
 	}
 
 	// Cleanup client shared memory
-	fmt.Println("[cleanup] Detaching and removing client shared memory segments...")
 	for _, client := range clients {
 		if err := shm.Dt(client.ShmBuffer); err != nil {
-			fmt.Printf("[ERROR] Failed to detach shared memory for client %s: %v\n", client.Name, err)
+			fmt.Printf("Failed to detach shared memory for client %s: %v\n", client.Name, err)
 		}
 		if _, err := shm.Ctl(client.ShmId, shm.IPC_RMID, nil); err != nil {
-			fmt.Printf("[ERROR] Failed to remove shared memory segment for client %s: %v\n", client.Name, err)
+			fmt.Printf("Failed to remove shared memory segment for client %s: %v\n", client.Name, err)
 		}
 		client.Conn.Close()
 	}
@@ -73,7 +72,6 @@ func newSharedMemory(shmKey int) (int, []byte, error) {
 		fmt.Printf("Error creating shared memory: %v\n", err)
 		return 0, nil, err
 	}
-	fmt.Printf("Created shared memory segment with ID %d\n", shmId)
 
 	// Attach to the shared memory segment
 	shmBuffer, err := shm.At(shmId, 0, 0)
@@ -99,13 +97,27 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Create unix domain socket for small communications
+	os.Remove(socketName)
+	registrationListener, err := net.Listen("unix", socketName)
+	if err != nil {
+		fmt.Printf("Error creating Unix domain socket: %v\n", err)
+		os.Exit(1)
+	}
+
 	// A thread for cleanup
 	go func() {
 		<-signalChan
-		fmt.Println("\n[INFO] Received SIGINT, cleaning up...")
+		fmt.Println("\nReceived interrupt, cleaning up...")
 		mu.Lock()
 		cleanupSharedMemory(clients, shmId, shmBuffer)
+		for _, client := range clients {
+			client.Conn.Close()
+		}
 		mu.Unlock()
+		registrationListener.Close()
+		os.Remove(socketName)
+		fmt.Println("Goodbye!")
 		os.Exit(0)
 	}()
 
@@ -123,24 +135,16 @@ func main() {
 		}
 	}()
 
-	//os.Remove(socketName)
-	registrationListener, err := net.Listen("unix", socketName)
-	if err != nil {
-		fmt.Printf("Error creating Unix domain socket: %v\n", err)
-		os.Exit(1)
-	}
-	defer registrationListener.Close()
-	defer os.Remove(socketName)
-
-	fmt.Println("IPC server started. Waiting for clients...")
-
 	// A thread for client registrations
 	go func() {
 		for {
 			conn, err := registrationListener.Accept()
 			if err != nil {
-				fmt.Printf("Error accepting connection: %v\n", err)
-				os.Exit(1)
+				// Don't print error if we close the registration listener
+				if !strings.Contains(err.Error(), "use of closed network connection") {
+					fmt.Printf("Error accepting connection: %v\n", err)
+				}
+				return
 			}
 			defer conn.Close()
 
@@ -148,15 +152,15 @@ func main() {
 			n, err := conn.Read(clientNameBytes)
 			if err != nil {
 				fmt.Printf("Error reading client name: %v\n", err)
-				os.Exit(1)
+				return
 			}
 			clientName := string(clientNameBytes[:n])
 
-			clientShmKey := shmDriverKey + len(clients)
+			clientShmKey := shmDriverKey + len(clients) + 1
 			clientShmId, clientShmBuffer, err := newSharedMemory(clientShmKey)
 			if err != nil {
 				fmt.Printf("Error creating client output shm: %v\n", err)
-				os.Exit(1)
+				return
 			}
 
 			clientShmKeyBytes := make([]byte, 4)
@@ -182,13 +186,17 @@ func main() {
 	}()
 
 	for {
-		mu.Lock()
 		start := time.Now()
 
 		// Wait for at least one client to connect
-		if len(clients) == 0 {
+		mu.Lock()
+		numClients := len(clients)
+		mu.Unlock()
+		if numClients == 0 {
 			fmt.Println("No clients yet...")
 			time.Sleep(1 * time.Second)
+			count = 0
+			totalTime = 0
 			continue
 		}
 
@@ -197,6 +205,7 @@ func main() {
 		input := generatePseudoRandomData(inputSize)
 		copy(shmBuffer, input)
 
+		mu.Lock()
 		wg := &sync.WaitGroup{}
 		for _, client := range clients {
 			wg.Add(1)
@@ -209,9 +218,7 @@ func main() {
 				_, err := client.Conn.Write([]byte(sizeBytes))
 				if err != nil {
 					fmt.Printf("Error writing to client %s: %v\n", client.Name, err)
-					mu.Lock()
 					delete(clients, client.Name)
-					mu.Unlock()
 					return
 				}
 
@@ -220,9 +227,7 @@ func main() {
 				_, err = client.Conn.Read(responseSizeBytes)
 				if err != nil {
 					fmt.Printf("Error reading response from client %s: %v\n", client.Name, err)
-					mu.Lock()
 					delete(clients, client.Name)
-					mu.Unlock()
 					return
 				}
 
@@ -231,8 +236,8 @@ func main() {
 				_ = shmBuffer[:responseSize]
 			}(client)
 		}
-		mu.Unlock()
 		wg.Wait()
+		mu.Unlock()
 
 		duration := time.Since(start)
 		totalTime += duration
