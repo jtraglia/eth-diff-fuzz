@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
@@ -202,12 +203,13 @@ func main() {
 		}
 
 		// Generate some input & throw it into the input buffer
-		inputSize := 10 * 1024 * 1024
+		inputSize := 1 * 1024 * 1024
 		input := generatePseudoRandomData(inputSize)
 		copy(shmBuffer, input)
 
 		mu.Lock()
 		wg := &sync.WaitGroup{}
+		results := make(map[string][]byte)
 		for _, client := range clients {
 			wg.Add(1)
 			go func(client *Client) {
@@ -218,7 +220,10 @@ func main() {
 				binary.BigEndian.PutUint32(sizeBytes, uint32(inputSize))
 				_, err := client.Conn.Write([]byte(sizeBytes))
 				if err != nil {
-					fmt.Printf("Error writing to client %s: %v\n", client.Name, err)
+					if !strings.Contains(err.Error(), "broken pipe") {
+						fmt.Printf("Error writing to client %s: %v\n", client.Name, err)
+					}
+					fmt.Printf("Client disconnected: %v\n", client.Name)
 					delete(clients, client.Name)
 					return
 				}
@@ -234,11 +239,30 @@ func main() {
 
 				// Decode the received size
 				responseSize := binary.BigEndian.Uint32(responseSizeBytes)
-				_ = shmBuffer[:responseSize]
+				results[client.Name] = shmBuffer[:responseSize]
 			}(client)
 		}
 		wg.Wait()
 		mu.Unlock()
+
+		same := true
+		var first []byte
+		firstResultSet := false
+		for _, result := range results {
+			if !firstResultSet {
+				first = result
+				firstResultSet = true
+			} else if !bytes.Equal(result, first) {
+				same = false
+				break
+			}
+		}
+		if !same {
+			fmt.Println("Values are different:")
+			for client, result := range results {
+				fmt.Printf("Key: %v, Value: %x\n", client, result)
+			}
+		}
 
 		duration := time.Since(start)
 		totalTime += duration
