@@ -6,23 +6,27 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gen2brain/shm"
 )
 
 const (
-	shmKey  = 0x1234            // Shared memory key
-	shmSize = 100 * 1024 * 1024 // Shared memory size (100 MiB)
-	shmPerm = 0666
+	shmDriverKey = 0                 // Shared memory key
+	shmSize      = 100 * 1024 * 1024 // Shared memory size (100 MiB)
+	shmPerm      = 0666
 
 	socketName = "/tmp/eth-cl-fuzz"
 )
 
 type Client struct {
-	Name string
-	Conn net.Conn
+	Name      string
+	Conn      net.Conn
+	ShmId     int
+	ShmBuffer []byte
 }
 
 // generatePseudoRandomData generates pseudo-random data for testing.
@@ -35,7 +39,8 @@ func generatePseudoRandomData(shmSize int) []byte {
 	return data
 }
 
-func main() {
+/*
+func deleteSharedMemory(shmKey int) error {
 	// Delete existing shared memory if it exists
 	shmId, err := shm.Get(shmKey, 0, shmPerm)
 	if err == nil {
@@ -43,17 +48,44 @@ func main() {
 		_, err := shm.Ctl(shmId, shm.IPC_RMID, nil)
 		if err != nil {
 			fmt.Printf("Failed to remove existing shared memory: %v\n", err)
-			os.Exit(1)
+			return err
 		} else {
 			fmt.Println("[driver] Successfully removed existing shared memory.")
 		}
 	}
+	return nil
+}
+*/
 
+func cleanupSharedMemory(clients map[string]*Client, shmId int, shmBuffer []byte) {
+	// Cleanup driver shared memory
+	fmt.Println("[cleanup] Detaching and removing driver shared memory...")
+	if err := shm.Dt(shmBuffer); err != nil {
+		fmt.Printf("[ERROR] Failed to detach driver shared memory: %v\n", err)
+	}
+	if _, err := shm.Ctl(shmId, shm.IPC_RMID, nil); err != nil {
+		fmt.Printf("[ERROR] Failed to remove driver shared memory: %v\n", err)
+	}
+
+	// Cleanup client shared memory
+	fmt.Println("[cleanup] Detaching and removing client shared memory segments...")
+	for _, client := range clients {
+		if err := shm.Dt(client.ShmBuffer); err != nil {
+			fmt.Printf("[ERROR] Failed to detach shared memory for client %s: %v\n", client.Name, err)
+		}
+		if _, err := shm.Ctl(client.ShmId, shm.IPC_RMID, nil); err != nil {
+			fmt.Printf("[ERROR] Failed to remove shared memory segment for client %s: %v\n", client.Name, err)
+		}
+		client.Conn.Close()
+	}
+}
+
+func newSharedMemory(shmKey int) (int, []byte, error) {
 	// Create the shared memory segment
-	shmId, err = shm.Get(shmKey, shmSize, shmPerm|shm.IPC_CREAT|shm.IPC_EXCL)
+	shmId, err := shm.Get(shmKey, shmSize, shmPerm|shm.IPC_CREAT|shm.IPC_EXCL)
 	if err != nil {
 		fmt.Printf("Error creating shared memory: %v\n", err)
-		os.Exit(1)
+		return 0, nil, err
 	}
 	fmt.Printf("[driver] Created shared memory segment with ID %d\n", shmId)
 
@@ -61,10 +93,37 @@ func main() {
 	shmBuffer, err := shm.At(shmId, 0, 0)
 	if err != nil {
 		fmt.Printf("Error attaching to shared memory: %v\n", err)
+		return 0, nil, err
+	}
+
+	return shmId, shmBuffer, nil
+}
+
+func main() {
+	clients := make(map[string]*Client)
+	mu := &sync.Mutex{}
+
+	// Handle SIGINT for cleanup
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
+
+	shmId, shmBuffer, err := newSharedMemory(shmDriverKey)
+	if err != nil {
+		fmt.Printf("Error creating input shm: %v\n", err)
 		os.Exit(1)
 	}
-	defer shm.Dt(shmBuffer)
-	defer shm.Ctl(shmId, shm.IPC_RMID, nil)
+	//defer shm.Dt(shmBuffer)
+	//defer shm.Ctl(shmId, shm.IPC_RMID, nil)
+
+	// Signal cleanup on interrupt
+	go func() {
+		<-signalChan
+		fmt.Println("\n[INFO] Received SIGINT, cleaning up...")
+		mu.Lock()
+		cleanupSharedMemory(clients, shmId, shmBuffer)
+		mu.Unlock()
+		os.Exit(0)
+	}()
 
 	var totalTime time.Duration
 	var count int
@@ -90,9 +149,7 @@ func main() {
 
 	fmt.Println("[Server] IPC server started. Waiting for clients...")
 
-	clients := make(map[string]*Client)
-	mu := &sync.Mutex{}
-
+	clientShmKey := 1
 	go func() {
 		for {
 			conn, err := registrationListener.Accept()
@@ -100,7 +157,7 @@ func main() {
 				fmt.Printf("Error accepting connection: %v\n", err)
 				os.Exit(1)
 			}
-			//defer conn.Close()
+			defer conn.Close()
 
 			clientNameBytes := make([]byte, 32)
 			n, err := conn.Read(clientNameBytes)
@@ -110,12 +167,52 @@ func main() {
 			}
 			clientName := string(clientNameBytes[:n])
 
+			clientShmId, clientShmBuffer, err := newSharedMemory(clientShmKey)
+			if err != nil {
+				fmt.Printf("Error creating client output shm: %v\n", err)
+				os.Exit(1)
+			}
+			//defer shm.Dt(clientShmBuffer)
+			//defer shm.Ctl(clientShmId, shm.IPC_RMID, nil)
+			defer func() {
+				fmt.Println("[DEBUG] Detaching shared memory buffer.")
+				if err := shm.Dt(clientShmBuffer); err != nil {
+					fmt.Printf("[ERROR] Failed to detach shared memory buffer: %v\n", err)
+				} else {
+					fmt.Println("[DEBUG] Successfully detached shared memory buffer.")
+				}
+			}()
+
+			defer func() {
+				fmt.Println("[DEBUG] Removing shared memory segment.")
+				if _, err := shm.Ctl(clientShmId, shm.IPC_RMID, nil); err != nil {
+					fmt.Printf("[ERROR] Failed to remove shared memory segment: %v\n", err)
+				} else {
+					fmt.Println("[DEBUG] Successfully removed shared memory segment.")
+				}
+			}()
+
+			clientShmKeyBytes := make([]byte, 4)
+			binary.BigEndian.PutUint32(clientShmKeyBytes, uint32(clientShmKey))
+			_, err = conn.Write([]byte(clientShmKeyBytes))
+			if err != nil {
+				fmt.Printf("[Server] Error writing to client %s: %v\n", clientName, err)
+				return
+			}
+
 			mu.Lock()
 			if _, exists := clients[clientName]; !exists {
-				clients[clientName] = &Client{Name: clientName, Conn: conn}
+				clients[clientName] = &Client{
+					Name:      clientName,
+					Conn:      conn,
+					ShmId:     clientShmId,
+					ShmBuffer: clientShmBuffer,
+				}
 				fmt.Printf("[Server] Registered new client: %s\n", clientName)
 			}
 			mu.Unlock()
+
+			clientShmKey += 1
 		}
 	}()
 
@@ -128,7 +225,7 @@ func main() {
 		}
 
 		start := time.Now()
-		dataSize := 50 * 1024 * 1024
+		dataSize := 10 * 1024 * 1024
 		preState := generatePseudoRandomData(dataSize)
 		copy(shmBuffer, preState)
 
