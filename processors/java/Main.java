@@ -24,14 +24,20 @@ public class App {
         int shmctl(int shmid, int cmd, Pointer buf);
     }
 
+    private static Pointer shmInputAddr;
+    private static int shmInputId;
+    private static Pointer shmOutputAddr;
+    private static int shmOutputId;
+
     public static void main(String[] args) {
         System.out.println("Connecting to driver...");
         AtomicBoolean running = new AtomicBoolean(true);
 
         // Set up Ctrl+C handling
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            System.out.println("\nCtrl+C detected! Exiting...");
+            System.out.println("\nCtrl+C detected! Cleaning up...");
             running.set(false);
+            cleanupSharedMemory(); // Ensure shared memory is cleaned up on shutdown
         }));
 
         try (SocketChannel socketChannel = connectToUnixSocket(SOCKET_NAME)) {
@@ -40,22 +46,27 @@ public class App {
             socketChannel.write(nameBuffer);
 
             // Attach to input shared memory
-            ByteBuffer shmInputBuffer = attachSharedMemory(SHM_INPUT_KEY, SHM_MAX_SIZE, false);
+            shmInputAddr = attachSharedMemory(SHM_INPUT_KEY, SHM_MAX_SIZE, false);
+            shmInputId = getSharedMemoryId(SHM_INPUT_KEY, SHM_MAX_SIZE, false);
 
             // Receive the output shared memory key
             int shmOutputKey = receiveOutputKey(socketChannel);
 
             // Attach to output shared memory
-            ByteBuffer shmOutputBuffer = attachSharedMemory(shmOutputKey, SHM_MAX_SIZE, true);
+            shmOutputAddr = attachSharedMemory(shmOutputKey, SHM_MAX_SIZE, true);
+            shmOutputId = getSharedMemoryId(shmOutputKey, SHM_MAX_SIZE, true);
 
             System.out.println("Running... Press Ctrl+C to exit");
 
             while (running.get()) {
-                processFuzzingLoop(socketChannel, shmInputBuffer, shmOutputBuffer);
+                processFuzzingLoop(socketChannel, shmInputAddr.getByteBuffer(0, SHM_MAX_SIZE),
+                                   shmOutputAddr.getByteBuffer(0, SHM_MAX_SIZE));
             }
 
         } catch (Exception e) {
             e.printStackTrace();
+        } finally {
+            cleanupSharedMemory(); // Ensure cleanup happens in case of exceptions
         }
     }
 
@@ -72,8 +83,8 @@ public class App {
     }
 
     private static void processFuzzingLoop(SocketChannel socketChannel,
-            ByteBuffer shmInputBuffer, ByteBuffer shmOutputBuffer)
-        throws IOException, NoSuchAlgorithmException {
+                                           ByteBuffer shmInputBuffer, ByteBuffer shmOutputBuffer)
+            throws IOException, NoSuchAlgorithmException {
 
         // Read the size of the input data
         ByteBuffer sizeBuffer = ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN);
@@ -83,7 +94,7 @@ public class App {
 
         // Check if shared memory has enough data
         if (shmInputBuffer.remaining() < inputSize) {
-        throw new IOException("Shared memory buffer does not contain enough data");
+            throw new IOException("Shared memory buffer does not contain enough data");
         }
 
         // Reset buffer position and read input
@@ -107,7 +118,7 @@ public class App {
         socketChannel.write(responseBuffer);
     }
 
-    private static ByteBuffer attachSharedMemory(int shmKey, int size, boolean readOnly) throws IOException {
+    private static Pointer attachSharedMemory(int shmKey, int size, boolean readOnly) throws IOException {
         int flags = readOnly ? 0666 : (0666 | 01000); // 01000 = IPC_CREAT
         int shmId = CLib.INSTANCE.shmget(shmKey, size, flags);
         if (shmId == -1) {
@@ -119,6 +130,32 @@ public class App {
             throw new IOException("Failed to attach to shared memory segment: shmat returned -1");
         }
 
-        return shmAddr.getByteBuffer(0, size);
+        return shmAddr;
+    }
+
+    private static int getSharedMemoryId(int shmKey, int size, boolean readOnly) throws IOException {
+        int flags = readOnly ? 0666 : (0666 | 01000); // 01000 = IPC_CREAT
+        int shmId = CLib.INSTANCE.shmget(shmKey, size, flags);
+        if (shmId == -1) {
+            throw new IOException("Failed to create shared memory segment: shmget returned -1");
+        }
+        return shmId;
+    }
+
+    private static void cleanupSharedMemory() {
+        try {
+            if (shmInputAddr != null) {
+                CLib.INSTANCE.shmdt(shmInputAddr);
+                CLib.INSTANCE.shmctl(shmInputId, 0, null); // 0 = IPC_RMID
+                System.out.println("Cleaned up input shared memory");
+            }
+            if (shmOutputAddr != null) {
+                CLib.INSTANCE.shmdt(shmOutputAddr);
+                CLib.INSTANCE.shmctl(shmOutputId, 0, null); // 0 = IPC_RMID
+                System.out.println("Cleaned up output shared memory");
+            }
+        } catch (Exception e) {
+            System.err.println("Failed to cleanup shared memory: " + e.getMessage());
+        }
     }
 }
