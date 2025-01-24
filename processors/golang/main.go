@@ -77,51 +77,58 @@ func main() {
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
 
-	go func() {
-		<-signalChan
-		fmt.Println("\nCtrl+C detected! Cleaning up...")
-		atomic.StoreInt32(&running, 0)
-	}()
-
 	fmt.Println("Running... Press Ctrl+C to exit")
 
 	// Fuzzing loop
 	for atomic.LoadInt32(&running) == 1 {
 		var inputSizeBuffer [4]byte
-		_, err := stream.Read(inputSizeBuffer[:])
-		if err != nil {
-			if err.Error() == "EOF" {
-				fmt.Println("Driver disconnected")
-			} else {
-				fmt.Printf("Failed to read size from socket: %v\n", err)
+		readDone := make(chan error, 1)
+
+		// Perform the blocking read in a separate goroutine
+		go func() {
+			_, err := stream.Read(inputSizeBuffer[:])
+			readDone <- err
+		}()
+
+		select {
+		case err := <-readDone:
+			if err != nil {
+				if err.Error() == "EOF" {
+					fmt.Println("Driver disconnected")
+					fmt.Println("Goodbye!")
+				} else {
+					fmt.Printf("Failed to read size from socket: %v\n", err)
+				}
+				return
 			}
-			break
-		}
 
-		// Get the input
-		inputSize := binary.BigEndian.Uint32(inputSizeBuffer[:])
-		input := shmInputAddr[:inputSize]
+			// Get the input
+			inputSize := binary.BigEndian.Uint32(inputSizeBuffer[:])
+			input := shmInputAddr[:inputSize]
 
-		// Process the input
-		startTime := time.Now()
-		hasher := sha256.New()
-		hasher.Write(input)
-		result := hasher.Sum(nil)
+			// Process the input
+			startTime := time.Now()
+			hasher := sha256.New()
+			hasher.Write(input)
+			result := hasher.Sum(nil)
 
-		output := shmOutputAddr[:len(result)]
-		copy(output, result)
-		elapsedTime := time.Since(startTime)
-		fmt.Printf("Processing time: %v\n", elapsedTime)
+			output := shmOutputAddr[:len(result)]
+			copy(output, result)
+			elapsedTime := time.Since(startTime)
+			fmt.Printf("Processing time: %v\n", elapsedTime)
 
-		// Send the size of the processed data back to the driver
-		var responseSizeBuffer [4]byte
-		binary.BigEndian.PutUint32(responseSizeBuffer[:], uint32(len(result)))
-		_, err = stream.Write(responseSizeBuffer[:])
-		if err != nil {
-			fmt.Printf("Failed to send response to driver: %v\n", err)
-			break
+			// Send the size of the processed data back to the driver
+			var responseSizeBuffer [4]byte
+			binary.BigEndian.PutUint32(responseSizeBuffer[:], uint32(len(result)))
+			_, err = stream.Write(responseSizeBuffer[:])
+			if err != nil {
+				fmt.Printf("Failed to send response to driver: %v\n", err)
+				return
+			}
+		case <-signalChan:
+			fmt.Println("\nCtrl+C detected")
+			fmt.Println("Goodbye!")
+			return
 		}
 	}
-
-	fmt.Println("Goodbye!")
 }

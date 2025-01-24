@@ -51,7 +51,6 @@ public class Main {
 
         // Set up Ctrl+C handling
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            System.out.println("\nCtrl+C detected! Cleaning up...");
             running.set(false);
             cleanupSharedMemory(); // Ensure shared memory is cleaned up on shutdown
         }));
@@ -71,16 +70,16 @@ public class Main {
             output = attachSharedMemory(shmOutputKey);
 
             System.out.println("Running... Press Ctrl+C to exit");
-
             while (running.get()) {
-                processFuzzingLoop(socketChannel, input.getShmAddr().getByteBuffer(0, SHM_MAX_SIZE),
-                                   output.getShmAddr().getByteBuffer(0, SHM_MAX_SIZE));
+                boolean shouldBreak = processFuzzingLoop(
+                    socketChannel, input.getShmAddr().getByteBuffer(0, SHM_MAX_SIZE),
+                    output.getShmAddr().getByteBuffer(0, SHM_MAX_SIZE));
+                if (shouldBreak) {
+                    break;
+                }
             }
-
         } catch (Exception e) {
             e.printStackTrace();
-        } finally {
-            cleanupSharedMemory(); // Ensure cleanup happens in case of exceptions
         }
     }
 
@@ -96,7 +95,7 @@ public class Main {
         return buffer.getInt();
     }
 
-    private static void processFuzzingLoop(SocketChannel socketChannel,
+    private static boolean processFuzzingLoop(SocketChannel socketChannel,
                                            ByteBuffer shmInputBuffer, ByteBuffer shmOutputBuffer)
             throws IOException, NoSuchAlgorithmException {
 
@@ -104,7 +103,15 @@ public class Main {
         ByteBuffer sizeBuffer = ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN);
         socketChannel.read(sizeBuffer);
         sizeBuffer.flip();
-        int inputSize = sizeBuffer.getInt();
+
+        int inputSize = 0;
+
+        try {
+            inputSize = sizeBuffer.getInt();
+        } catch (java.nio.BufferUnderflowException e) {
+            System.out.println("Driver disconnected");
+            return true;
+        }
 
         // Check if shared memory has enough data
         if (shmInputBuffer.remaining() < inputSize) {
@@ -130,6 +137,7 @@ public class Main {
         ByteBuffer responseBuffer = ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(result.length);
         responseBuffer.flip();
         socketChannel.write(responseBuffer);
+        return false;
     }
 
     private static SharedMemory attachSharedMemory(int shmKey) throws IOException {
@@ -151,15 +159,14 @@ public class Main {
             if (input.getShmAddr() != null) {
                 CLib.INSTANCE.shmdt(input.getShmAddr());
                 CLib.INSTANCE.shmctl(input.getShmId(), 0, null); // 0 = IPC_RMID
-                System.out.println("Cleaned up input shared memory");
             }
             if (output.getShmAddr() != null) {
                 CLib.INSTANCE.shmdt(output.getShmAddr());
                 CLib.INSTANCE.shmctl(output.getShmId(), 0, null); // 0 = IPC_RMID
-                System.out.println("Cleaned up output shared memory");
             }
         } catch (Exception e) {
             System.err.println("Failed to cleanup shared memory: " + e.getMessage());
         }
+        System.out.println("Goodbye!");
     }
 }

@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -109,7 +110,7 @@ func main() {
 	// A thread for cleanup
 	go func() {
 		<-signalChan
-		fmt.Println("\nReceived interrupt, cleaning up...")
+		fmt.Println("\nReceived interrupt")
 		mu.Lock()
 		cleanupSharedMemory(clients, shmId, shmBuffer)
 		for _, client := range clients {
@@ -131,8 +132,14 @@ func main() {
 		for range ticker.C {
 			if count != 0 {
 				average := totalTime / time.Duration(count)
-				fmt.Printf("Fuzzing Time: %s, Iterations: %v, Average Iteration: %s\n",
-					totalTime.Round(time.Second), count, average.Round(time.Millisecond))
+				var clientNames []string
+				for clientName := range clients {
+					clientNames = append(clientNames, clientName)
+				}
+				sort.Strings(clientNames)
+				joinedNames := strings.Join(clientNames, ",")
+				fmt.Printf("Fuzzing Time: %s, Iterations: %v, Average Iteration: %s, Clients: %v\n",
+					totalTime.Round(time.Second), count, average.Round(time.Millisecond), joinedNames)
 			}
 		}
 	}()
@@ -194,8 +201,8 @@ func main() {
 		mu.Lock()
 		numClients := len(clients)
 		mu.Unlock()
-		if numClients < 2 {
-			fmt.Println("Waiting for 2+ clients...")
+		if numClients == 0 {
+			fmt.Println("Waiting for a client...")
 			time.Sleep(1 * time.Second)
 			count = 0
 			totalTime = 0
@@ -203,7 +210,7 @@ func main() {
 		}
 
 		// Generate some input & throw it into the input buffer
-		inputSize := 50 * 1024 * 1024 // 50 MiB
+		inputSize := 10 * 1024 * 1024 // 50 MiB
 		input := generatePseudoRandomData(inputSize)
 		copy(shmBuffer, input)
 

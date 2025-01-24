@@ -64,7 +64,7 @@ fn main() {
     let running = Arc::new(AtomicBool::new(true));
     let running_clone = Arc::clone(&running);
     ctrlc::set_handler(move || {
-        println!("\nCtrl+C detected! Cleaning up...");
+        println!("\nCtrl+C detected");
         running_clone.store(false, Ordering::SeqCst);
     })
     .expect("Error setting Ctrl+C handler");
