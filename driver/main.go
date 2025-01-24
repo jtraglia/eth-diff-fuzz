@@ -32,6 +32,7 @@ type Client struct {
 	Conn      net.Conn
 	ShmId     int
 	ShmBuffer []byte
+	Method    string
 }
 
 // generatePseudoRandomData generates pseudo-random data for testing.
@@ -178,6 +179,12 @@ func main() {
 				return
 			}
 
+			_, err = conn.Write([]byte("sha"))
+			if err != nil {
+				fmt.Printf("Error writing to client %s: %v\n", clientName, err)
+				return
+			}
+
 			mu.Lock()
 			if _, exists := clients[clientName]; !exists {
 				clients[clientName] = &Client{
@@ -185,6 +192,7 @@ func main() {
 					Conn:      conn,
 					ShmId:     outputShmId,
 					ShmBuffer: clientShmBuffer,
+					Method:    "sha",
 				}
 				fmt.Printf("Registered new client: %s\n", clientName)
 			}
@@ -221,7 +229,7 @@ func main() {
 			go func(client *Client) {
 				defer wg.Done()
 
-				// Send the message to the client
+				// Send the input size to the client
 				sizeBytes := make([]byte, 4)
 				binary.BigEndian.PutUint32(sizeBytes, uint32(inputSize))
 				_, err := client.Conn.Write([]byte(sizeBytes))

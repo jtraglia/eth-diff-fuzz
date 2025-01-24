@@ -12,6 +12,13 @@ use std::time::Instant;
 
 const SOCKET_NAME: &str = "/tmp/eth-cl-fuzz";
 
+fn process_input(method: &str, input: &[u8]) -> Result<Vec<u8>, String> {
+    match method {
+        "sha" => Ok(digest::digest(&digest::SHA256, input).as_ref().to_vec()),
+        _ => Err(format!("Unknown method: '{}'", method)),
+    }
+}
+
 fn main() {
     println!("Connecting to driver...");
     let mut stream = UnixStream::connect(SOCKET_NAME).expect("Failed to connect to driver");
@@ -41,6 +48,15 @@ fn main() {
         panic!("Error attaching to output shared memory");
     }
 
+    // Get the method to fuzz
+    let mut method_buffer = [0u8; 64];
+    stream
+        .read(&mut method_buffer)
+        .expect("Failed to read method from socket");
+    let method_string = String::from_utf8_lossy(&method_buffer);
+    let method = method_string.trim_matches('\0').trim();
+    println!("Fuzzing method: {}", method);
+
     // Create a Ctrl+C handler
     let running = Arc::new(AtomicBool::new(true));
     let running_clone = Arc::clone(&running);
@@ -63,29 +79,35 @@ fn main() {
 
                 // Process the input in some way...
                 let start_time = Instant::now();
-                let result = digest::digest(&digest::SHA256, input);
-                let output_size = digest::SHA256.output_len;
-                let output: &mut [u8] =
-                    unsafe { slice::from_raw_parts_mut(shm_output_addr as *mut u8, output_size) };
-                //output.copy_from_slice(&result);
-                output.copy_from_slice(result.as_ref());
+                match process_input(method, input) {
+                    Ok(output) => {
+                        // Copy the output to the shared memory
+                        let output_shm: &mut [u8] =
+                            unsafe { slice::from_raw_parts_mut(shm_output_addr as *mut u8, output.len()) };
+                        output_shm.copy_from_slice(output.as_ref());
+
+                        // Send the processed data size back to the driver as 4 bytes
+                        let mut response_size_buffer = [0u8; 4];
+                        BigEndian::write_u32(&mut response_size_buffer, output.len() as u32);
+                        if let Err(e) = stream.write_all(&response_size_buffer) {
+                            println!("Failed to send response to driver: {}", e);
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        break;
+                    }
+                }
                 let elapsed_time = start_time.elapsed();
                 println!("Processing time: {:.2?}", elapsed_time);
-
-                // Send the processed data size back to the driver as 4 bytes
-                let mut response_size_buffer = [0u8; 4];
-                BigEndian::write_u32(&mut response_size_buffer, output_size as u32);
-                if let Err(e) = stream.write_all(&response_size_buffer) {
-                    println!("Failed to send response to driver: {}", e);
-                    break;
-                }
             }
             Err(e) => {
                 // Print a nice message if the driver disconnects
                 if e.kind() == ErrorKind::UnexpectedEof {
                     println!("Driver disconnected");
                 } else {
-                    println!("Failed to read size from socket: {}", e);
+                    println!("Failed to read input size from socket: {}", e);
                 }
                 break;
             }
@@ -94,9 +116,7 @@ fn main() {
 
     unsafe {
         shmdt(shm_input_addr);
-        //shmctl(shm_input_id, IPC_RMID, ptr::null_mut());
         shmdt(shm_output_addr);
-        //shmctl(shm_output_id, IPC_RMID, ptr::null_mut());
     };
 
     println!("Goodbye!");

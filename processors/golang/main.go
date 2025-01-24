@@ -15,6 +15,16 @@ import (
 	"github.com/gen2brain/shm"
 )
 
+func processInput(method string, input []byte) ([]byte, error) {
+	switch method {
+	case "sha":
+		hash := sha256.Sum256(input)
+		return hash[:], nil
+	default:
+		return nil, fmt.Errorf("unknown method: '%s'", method)
+	}
+}
+
 func main() {
 	fmt.Println("Connecting to driver...")
 	stream, err := net.Dial("unix", "/tmp/eth-cl-fuzz")
@@ -55,6 +65,12 @@ func main() {
 	}
 	defer shm.Dt(outputShm)
 
+	// Get the method to fuzz
+	var methodBytes [64]byte
+	methodLength, err := stream.Read(methodBytes[:])
+	var method = string(methodBytes[:methodLength])
+	fmt.Printf("Fuzzing method: %s\n", method)
+
 	// Create a channel to handle Ctrl+C
 	running := int32(1)
 	signalChan := make(chan os.Signal, 1)
@@ -89,9 +105,11 @@ func main() {
 
 			// Process the input
 			startTime := time.Now()
-			hasher := sha256.New()
-			hasher.Write(inputShm[:inputSize])
-			result := hasher.Sum(nil)
+			result, err := processInput(method, inputShm[:inputSize])
+			if err != nil {
+				fmt.Printf("Failed to process input: %v\n", err)
+				return
+			}
 
 			// Write result to output
 			copy(outputShm[:len(result)], result)
