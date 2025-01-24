@@ -9,8 +9,6 @@ require (
 )
 
 require (
-	github.com/Pallinder/go-randomdata v1.2.0 // indirect
-	github.com/erggo/datafiller v0.0.0-20170207191639-26c75631fdca // indirect
 	github.com/fatih/color v1.16.0 // indirect
 	github.com/ferranbt/fastssz v0.1.3 // indirect
 	github.com/goccy/go-yaml v1.9.2 // indirect
