@@ -12,38 +12,42 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class Main {
     private static final String SOCKET_NAME = "/tmp/eth-cl-fuzz";
-    private static final int SHM_INPUT_KEY = 0;
-    private static final int SHM_MAX_SIZE = 100 * 1024 * 1024; // 100 MiB
 
     public interface CLib extends Library {
         CLib INSTANCE = Native.load("c", CLib.class);
-
-        int shmget(int key, int size, int shmflg);
         Pointer shmat(int shmid, Pointer shmaddr, int shmflg);
         int shmdt(Pointer shmaddr);
-        int shmctl(int shmid, int cmd, Pointer buf);
     }
 
-    private static class SharedMemory {
-        private final int shmId;
-        private final Pointer shmAddr;
-
-        public SharedMemory(int shmId, Pointer shmAddr) {
-            this.shmId = shmId;
-            this.shmAddr = shmAddr;
-        }
-
-        public int getShmId() {
-            return shmId;
-        }
-
-        public Pointer getShmAddr() {
-            return shmAddr;
-        }
-    }
-
+    private static record SharedMemory(int shmId, Pointer shmAddr) {}
     private static SharedMemory input;
     private static SharedMemory output;
+
+    private static SocketChannel connectToUnixSocket(String socketName) throws IOException {
+        UnixDomainSocketAddress address = UnixDomainSocketAddress.of(socketName);
+        return SocketChannel.open(address);
+    }
+
+    private static int getIntFromDriver(SocketChannel socketChannel) throws IOException {
+        ByteBuffer buffer = ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN);
+        socketChannel.read(buffer);
+        buffer.flip();
+        return buffer.getInt();
+    }
+
+    private static void sendIntToDriver(SocketChannel socketChannel, int value) throws IOException {
+        ByteBuffer responseBuffer = ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(value);
+        responseBuffer.flip();
+        socketChannel.write(responseBuffer);
+    }
+
+    private static SharedMemory attachSharedMemory(int shmId) throws IOException {
+        Pointer shmAddr = CLib.INSTANCE.shmat(shmId, null, 0);
+        if (Pointer.nativeValue(shmAddr) == -1) {
+            throw new IOException("Failed to attach to shared memory segment");
+        }
+        return new SharedMemory(shmId, shmAddr);
+    }
 
     public static void main(String[] args) {
         System.out.println("Connecting to driver...");
@@ -52,7 +56,9 @@ public class Main {
         // Set up Ctrl+C handling
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             running.set(false);
-            cleanupSharedMemory(); // Ensure shared memory is cleaned up on shutdown
+            CLib.INSTANCE.shmdt(input.shmAddr());
+            CLib.INSTANCE.shmdt(output.shmAddr());
+            System.out.println("Goodbye!");
         }));
 
         try (SocketChannel socketChannel = connectToUnixSocket(SOCKET_NAME)) {
@@ -61,19 +67,16 @@ public class Main {
             socketChannel.write(nameBuffer);
 
             // Attach to input shared memory
-            input = attachSharedMemory(SHM_INPUT_KEY);
-
-            // Receive the output shared memory key
-            int shmOutputKey = receiveOutputKey(socketChannel);
+            int inputShmId = getIntFromDriver(socketChannel);
+            input = attachSharedMemory(inputShmId);
 
             // Attach to output shared memory
-            output = attachSharedMemory(shmOutputKey);
+            int outputShmId = getIntFromDriver(socketChannel);
+            output = attachSharedMemory(outputShmId);
 
             System.out.println("Running... Press Ctrl+C to exit");
             while (running.get()) {
-                boolean shouldBreak = processFuzzingLoop(
-                    socketChannel, input.getShmAddr().getByteBuffer(0, SHM_MAX_SIZE),
-                    output.getShmAddr().getByteBuffer(0, SHM_MAX_SIZE));
+                boolean shouldBreak = processFuzzingLoop(socketChannel, input, output);
                 if (shouldBreak) {
                     break;
                 }
@@ -83,90 +86,31 @@ public class Main {
         }
     }
 
-    private static SocketChannel connectToUnixSocket(String socketName) throws IOException {
-        UnixDomainSocketAddress address = UnixDomainSocketAddress.of(socketName);
-        return SocketChannel.open(address);
-    }
-
-    private static int receiveOutputKey(SocketChannel socketChannel) throws IOException {
-        ByteBuffer buffer = ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN);
-        socketChannel.read(buffer);
-        buffer.flip();
-        return buffer.getInt();
-    }
-
     private static boolean processFuzzingLoop(SocketChannel socketChannel,
-                                           ByteBuffer shmInputBuffer, ByteBuffer shmOutputBuffer)
+            SharedMemory inputShm, SharedMemory outputShm)
             throws IOException, NoSuchAlgorithmException {
-
-        // Read the size of the input data
-        ByteBuffer sizeBuffer = ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN);
-        socketChannel.read(sizeBuffer);
-        sizeBuffer.flip();
-
+        // Read the the input
         int inputSize = 0;
-
         try {
-            inputSize = sizeBuffer.getInt();
+            inputSize = getIntFromDriver(socketChannel);
         } catch (java.nio.BufferUnderflowException e) {
             System.out.println("Driver disconnected");
             return true;
         }
-
-        // Check if shared memory has enough data
-        if (shmInputBuffer.remaining() < inputSize) {
-            throw new IOException("Shared memory buffer does not contain enough data");
-        }
-
-        // Reset buffer position and read input
-        shmInputBuffer.position(0);
         byte[] input = new byte[inputSize];
-        shmInputBuffer.get(input);
+        inputShm.shmAddr().getByteBuffer(0, inputSize).get(input);
 
         // Process the input
         long startTime = System.nanoTime();
         MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
         byte[] result = sha256.digest(input);
-        shmOutputBuffer.position(0);
-        shmOutputBuffer.put(result);
+        outputShm.shmAddr().getByteBuffer(0, result.length).put(result);
         long endTime = System.nanoTime();
         long duration = endTime - startTime;
         System.out.printf("Processing time: %.2fms%n", duration / 1_000_000.0);
 
         // Send response size back
-        ByteBuffer responseBuffer = ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(result.length);
-        responseBuffer.flip();
-        socketChannel.write(responseBuffer);
+        sendIntToDriver(socketChannel, result.length);
         return false;
-    }
-
-    private static SharedMemory attachSharedMemory(int shmKey) throws IOException {
-        int shmId = CLib.INSTANCE.shmget(shmKey, SHM_MAX_SIZE, 0666);
-        if (shmId == -1) {
-            throw new IOException("Failed to create shared memory segment: shmget returned -1");
-        }
-
-        Pointer shmAddr = CLib.INSTANCE.shmat(shmId, null, 0);
-        if (Pointer.nativeValue(shmAddr) == -1) {
-            throw new IOException("Failed to attach to shared memory segment: shmat returned -1");
-        }
-
-        return new SharedMemory(shmId, shmAddr);
-    }
-
-    private static void cleanupSharedMemory() {
-        try {
-            if (input.getShmAddr() != null) {
-                CLib.INSTANCE.shmdt(input.getShmAddr());
-                CLib.INSTANCE.shmctl(input.getShmId(), 0, null); // 0 = IPC_RMID
-            }
-            if (output.getShmAddr() != null) {
-                CLib.INSTANCE.shmdt(output.getShmAddr());
-                CLib.INSTANCE.shmctl(output.getShmId(), 0, null); // 0 = IPC_RMID
-            }
-        } catch (Exception e) {
-            System.err.println("Failed to cleanup shared memory: " + e.getMessage());
-        }
-        System.out.println("Goodbye!");
     }
 }

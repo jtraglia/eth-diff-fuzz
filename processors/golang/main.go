@@ -15,16 +15,9 @@ import (
 	"github.com/gen2brain/shm"
 )
 
-const (
-	socketName  = "/tmp/eth-cl-fuzz"
-	shmInputKey = 0
-	shmMaxSize  = 100 * 1024 * 1024 // 100 MiB
-	shmPerm     = 0666
-)
-
 func main() {
 	fmt.Println("Connecting to driver...")
-	stream, err := net.Dial("unix", socketName)
+	stream, err := net.Dial("unix", "/tmp/eth-cl-fuzz")
 	if err != nil {
 		log.Fatalf("Failed to connect to driver: %v", err)
 	}
@@ -37,56 +30,45 @@ func main() {
 	}
 
 	// Attach to the input shared memory segment
-	shmInputID, err := shm.Get(shmInputKey, shmMaxSize, shmPerm)
-	if err != nil {
-		log.Fatalf("Error getting input shared memory segment: %v", err)
-	}
-	shmInputAddr, err := shm.At(shmInputID, 0, 0)
-	if err != nil {
-		log.Fatalf("Error attaching to input shared memory: %v", err)
-	}
-	defer func() {
-		shm.Dt(shmInputAddr)
-		shm.Ctl(shmInputID, shm.IPC_RMID, nil)
-	}()
-
-	// Receive the output shared memory key from the driver
-	var shmOutputKeyBuffer [4]byte
-	_, err = stream.Read(shmOutputKeyBuffer[:])
+	var inputShmIdBytes [4]byte
+	_, err = stream.Read(inputShmIdBytes[:])
 	if err != nil {
 		log.Fatalf("Failed to read key from socket: %v", err)
 	}
-	shmOutputKey := int(binary.BigEndian.Uint32(shmOutputKeyBuffer[:]))
+	inputShmId := int(binary.BigEndian.Uint32(inputShmIdBytes[:]))
+	inputShm, err := shm.At(inputShmId, 0, 0)
+	if err != nil {
+		log.Fatalf("Error attaching to input shared memory: %v", err)
+	}
+	defer shm.Dt(inputShm)
 
 	// Attach to the output shared memory segment
-	shmOutputID, err := shm.Get(shmOutputKey, shmMaxSize, shmPerm)
+	var outputShmIdBytes [4]byte
+	_, err = stream.Read(outputShmIdBytes[:])
 	if err != nil {
-		log.Fatalf("Error getting output shared memory segment: %v", err)
+		log.Fatalf("Failed to read key from socket: %v", err)
 	}
-	shmOutputAddr, err := shm.At(shmOutputID, 0, 0)
+	outputShmId := int(binary.BigEndian.Uint32(outputShmIdBytes[:]))
+	outputShm, err := shm.At(outputShmId, 0, 0)
 	if err != nil {
 		log.Fatalf("Error attaching to output shared memory: %v", err)
 	}
-	defer func() {
-		shm.Dt(shmOutputAddr)
-		shm.Ctl(shmOutputID, shm.IPC_RMID, nil)
-	}()
+	defer shm.Dt(outputShm)
 
 	// Create a channel to handle Ctrl+C
 	running := int32(1)
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
-
 	fmt.Println("Running... Press Ctrl+C to exit")
 
 	// Fuzzing loop
 	for atomic.LoadInt32(&running) == 1 {
-		var inputSizeBuffer [4]byte
+		var inputSizeBytes [4]byte
 		readDone := make(chan error, 1)
 
 		// Perform the blocking read in a separate goroutine
 		go func() {
-			_, err := stream.Read(inputSizeBuffer[:])
+			_, err := stream.Read(inputSizeBytes[:])
 			readDone <- err
 		}()
 
@@ -103,17 +85,16 @@ func main() {
 			}
 
 			// Get the input
-			inputSize := binary.BigEndian.Uint32(inputSizeBuffer[:])
-			input := shmInputAddr[:inputSize]
+			inputSize := binary.BigEndian.Uint32(inputSizeBytes[:])
 
 			// Process the input
 			startTime := time.Now()
 			hasher := sha256.New()
-			hasher.Write(input)
+			hasher.Write(inputShm[:inputSize])
 			result := hasher.Sum(nil)
 
-			output := shmOutputAddr[:len(result)]
-			copy(output, result)
+			// Write result to output
+			copy(outputShm[:len(result)], result)
 			elapsedTime := time.Since(startTime)
 			fmt.Printf("Processing time: %v\n", elapsedTime)
 

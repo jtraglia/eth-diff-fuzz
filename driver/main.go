@@ -22,9 +22,9 @@ const (
 
 	maxClientNameLength = 32
 
-	shmDriverKey = 1000
-	shmMaxSize   = 100 * 1024 * 1024 // 100 MiB
-	shmPerm      = 0666
+	inputShmKey = 1000
+	shmMaxSize  = 100 * 1024 * 1024 // 100 MiB
+	shmPerm     = 0666
 )
 
 type Client struct {
@@ -44,25 +44,14 @@ func generatePseudoRandomData(shmMaxSize int) []byte {
 	return data
 }
 
-// cleanupSharedMemory detaches and removes all shared memories.
-func cleanupSharedMemory(clients map[string]*Client, shmId int, shmBuffer []byte) {
+// detachAndDelete detaches and deletes a shared memory region.
+func detachAndDelete(shmId int, shmBuffer []byte) {
 	// Cleanup driver shared memory
 	if err := shm.Dt(shmBuffer); err != nil {
 		fmt.Printf("Failed to detach driver shared memory: %v\n", err)
 	}
 	if _, err := shm.Ctl(shmId, shm.IPC_RMID, nil); err != nil {
 		fmt.Printf("Failed to remove driver shared memory: %v\n", err)
-	}
-
-	// Cleanup client shared memory
-	for _, client := range clients {
-		if err := shm.Dt(client.ShmBuffer); err != nil {
-			fmt.Printf("Failed to detach shared memory for client %s: %v\n", client.Name, err)
-		}
-		if _, err := shm.Ctl(client.ShmId, shm.IPC_RMID, nil); err != nil {
-			fmt.Printf("Failed to remove shared memory segment for client %s: %v\n", client.Name, err)
-		}
-		client.Conn.Close()
 	}
 }
 
@@ -93,7 +82,7 @@ func main() {
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
 
-	shmId, shmBuffer, err := newSharedMemory(shmDriverKey)
+	inputShmId, inputShmBuffer, err := newSharedMemory(inputShmKey)
 	if err != nil {
 		fmt.Printf("Error creating input shm: %v\n", err)
 		os.Exit(1)
@@ -112,9 +101,10 @@ func main() {
 		<-signalChan
 		fmt.Println("\nReceived interrupt")
 		mu.Lock()
-		cleanupSharedMemory(clients, shmId, shmBuffer)
+		detachAndDelete(inputShmId, inputShmBuffer)
 		for _, client := range clients {
 			client.Conn.Close()
+			detachAndDelete(client.ShmId, client.ShmBuffer)
 		}
 		mu.Unlock()
 		registrationListener.Close()
@@ -165,16 +155,24 @@ func main() {
 			}
 			clientName := string(clientNameBytes[:n])
 
-			clientShmKey := shmDriverKey + len(clients) + 1
-			clientShmId, clientShmBuffer, err := newSharedMemory(clientShmKey)
+			inputShmIdBytes := make([]byte, 4)
+			binary.BigEndian.PutUint32(inputShmIdBytes, uint32(inputShmId))
+			_, err = conn.Write([]byte(inputShmIdBytes))
+			if err != nil {
+				fmt.Printf("Error writing to client %s: %v\n", clientName, err)
+				return
+			}
+
+			outputShmKey := inputShmKey + len(clients) + 1
+			outputShmId, clientShmBuffer, err := newSharedMemory(outputShmKey)
 			if err != nil {
 				fmt.Printf("Error creating client output shm: %v\n", err)
 				return
 			}
 
-			clientShmKeyBytes := make([]byte, 4)
-			binary.BigEndian.PutUint32(clientShmKeyBytes, uint32(clientShmKey))
-			_, err = conn.Write([]byte(clientShmKeyBytes))
+			outputShmIdBytes := make([]byte, 4)
+			binary.BigEndian.PutUint32(outputShmIdBytes, uint32(outputShmId))
+			_, err = conn.Write([]byte(outputShmIdBytes))
 			if err != nil {
 				fmt.Printf("Error writing to client %s: %v\n", clientName, err)
 				return
@@ -185,7 +183,7 @@ func main() {
 				clients[clientName] = &Client{
 					Name:      clientName,
 					Conn:      conn,
-					ShmId:     clientShmId,
+					ShmId:     outputShmId,
 					ShmBuffer: clientShmBuffer,
 				}
 				fmt.Printf("Registered new client: %s\n", clientName)
@@ -212,7 +210,7 @@ func main() {
 		// Generate some input & throw it into the input buffer
 		inputSize := 10 * 1024 * 1024 // 50 MiB
 		input := generatePseudoRandomData(inputSize)
-		copy(shmBuffer, input)
+		copy(inputShmBuffer, input)
 
 		mu.Lock()
 		wg := &sync.WaitGroup{}
@@ -228,10 +226,12 @@ func main() {
 				binary.BigEndian.PutUint32(sizeBytes, uint32(inputSize))
 				_, err := client.Conn.Write([]byte(sizeBytes))
 				if err != nil {
-					if !strings.Contains(err.Error(), "broken pipe") {
+					if strings.Contains(err.Error(), "broken pipe") {
+						fmt.Printf("Client disconnected: %v\n", client.Name)
+					} else {
 						fmt.Printf("Error writing to client %s: %v\n", client.Name, err)
 					}
-					fmt.Printf("Client disconnected: %v\n", client.Name)
+					detachAndDelete(client.ShmId, client.ShmBuffer)
 					delete(clients, client.Name)
 					return
 				}
@@ -243,6 +243,7 @@ func main() {
 					if !strings.Contains(err.Error(), "EOF") {
 						fmt.Printf("Error reading response from client %s: %v\n", client.Name, err)
 					}
+					detachAndDelete(client.ShmId, client.ShmBuffer)
 					delete(clients, client.Name)
 					return
 				}
@@ -250,7 +251,7 @@ func main() {
 
 				// Write the response to the results map
 				muResult.Lock()
-				results[client.Name] = shmBuffer[:responseSize]
+				results[client.Name] = client.ShmBuffer[:responseSize]
 				muResult.Unlock()
 			}(client)
 		}

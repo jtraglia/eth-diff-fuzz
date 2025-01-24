@@ -1,5 +1,5 @@
 use byteorder::{BigEndian, ByteOrder};
-use libc::{c_int, shmat, shmctl, shmdt, shmget, size_t, IPC_RMID, MAP_FAILED, S_IRUSR, S_IWUSR};
+use libc::{shmat, shmdt, MAP_FAILED};
 use ring::digest;
 use std::io::ErrorKind;
 use std::io::{Read, Write};
@@ -11,8 +11,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 const SOCKET_NAME: &str = "/tmp/eth-cl-fuzz";
-const SHM_INPUT_KEY: i32 = 0;
-const SHM_MAX_SIZE: usize = 100 * 1024 * 1024; // 100 MiB
 
 fn main() {
     println!("Connecting to driver...");
@@ -22,39 +20,22 @@ fn main() {
         .expect("Failed to send name to driver");
 
     // Attach to the input buffer
-    let shm_input_id = unsafe {
-        shmget(
-            SHM_INPUT_KEY,
-            SHM_MAX_SIZE as size_t,
-            (S_IRUSR | S_IWUSR) as c_int,
-        )
-    };
-    if shm_input_id == -1 {
-        panic!("Error getting input shared memory segment");
-    }
+    let mut shm_input_id_buffer = [0u8; 4];
+    stream
+        .read_exact(&mut shm_input_id_buffer)
+        .expect("Failed to read input id from socket");
+    let shm_input_id = BigEndian::read_u32(&shm_input_id_buffer) as i32;
     let shm_input_addr = unsafe { shmat(shm_input_id, ptr::null(), 0) };
     if shm_input_addr == MAP_FAILED {
         panic!("Error attaching to input shared memory");
     }
 
-    // Get the output key from the driver
-    let mut shm_output_key_buffer = [0u8; 4];
-    stream
-        .read_exact(&mut shm_output_key_buffer)
-        .expect("Failed to read key from socket");
-    let shm_output_key = BigEndian::read_u32(&shm_output_key_buffer) as i32;
-
     // Attach to the output buffer
-    let shm_output_id = unsafe {
-        shmget(
-            shm_output_key,
-            SHM_MAX_SIZE as size_t,
-            (S_IRUSR | S_IWUSR) as c_int,
-        )
-    };
-    if shm_output_id == -1 {
-        panic!("Error getting output shared memory segment");
-    }
+    let mut shm_output_id_buffer = [0u8; 4];
+    stream
+        .read_exact(&mut shm_output_id_buffer)
+        .expect("Failed to read output id from socket");
+    let shm_output_id = BigEndian::read_u32(&shm_output_id_buffer) as i32;
     let shm_output_addr = unsafe { shmat(shm_output_id, ptr::null(), 0) };
     if shm_output_addr == MAP_FAILED {
         panic!("Error attaching to output shared memory");
@@ -113,9 +94,9 @@ fn main() {
 
     unsafe {
         shmdt(shm_input_addr);
-        shmctl(shm_input_id, IPC_RMID, ptr::null_mut());
+        //shmctl(shm_input_id, IPC_RMID, ptr::null_mut());
         shmdt(shm_output_addr);
-        shmctl(shm_output_id, IPC_RMID, ptr::null_mut());
+        //shmctl(shm_output_id, IPC_RMID, ptr::null_mut());
     };
 
     println!("Goodbye!");
