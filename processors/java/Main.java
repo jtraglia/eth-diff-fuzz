@@ -37,13 +37,12 @@ public class Main {
     private static String getStrFromDriver(SocketChannel socketChannel) throws IOException {
         ByteBuffer buffer = ByteBuffer.allocate(64);
         int methodLength = socketChannel.read(buffer);
-        buffer.flip();
-
-        // Create a byte array containing only the valid bytes
+        if (methodLength <= 0) {
+            throw new IOException("No data read from socket or end of stream.");
+        }
         byte[] validBytes = new byte[methodLength];
+        buffer.flip();
         buffer.get(validBytes, 0, methodLength);
-
-        // Decode only the valid bytes, excluding any invalid UTF-8 sequences
         return new String(validBytes, StandardCharsets.UTF_8).replace("\0", "");
     }
 
@@ -61,8 +60,6 @@ public class Main {
     }
 
     private static record SharedMemory(int shmId, Pointer shmAddr) {}
-    private static SharedMemory inputShm;
-    private static SharedMemory outputShm;
 
     private static SharedMemory attachSharedMemory(int shmId) throws IOException {
         Pointer shmAddr = CLib.INSTANCE.shmat(shmId, null, 0);
@@ -76,14 +73,6 @@ public class Main {
         System.out.println("Connecting to driver...");
         AtomicBoolean running = new AtomicBoolean(true);
 
-        // Set up Ctrl+C handling
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            running.set(false);
-            CLib.INSTANCE.shmdt(inputShm.shmAddr());
-            CLib.INSTANCE.shmdt(outputShm.shmAddr());
-            System.out.println("Goodbye!");
-        }));
-
         try (SocketChannel socketChannel = connectToUnixSocket("/tmp/eth-cl-fuzz")) {
             // Send client name
             ByteBuffer nameBuffer = ByteBuffer.wrap("java".getBytes());
@@ -91,11 +80,19 @@ public class Main {
 
             // Attach to input shared memory
             int inputShmId = getIntFromDriver(socketChannel);
-            inputShm = attachSharedMemory(inputShmId);
+            final SharedMemory inputShm = attachSharedMemory(inputShmId);
 
             // Attach to output shared memory
             int outputShmId = getIntFromDriver(socketChannel);
-            outputShm = attachSharedMemory(outputShmId);
+            final SharedMemory outputShm = attachSharedMemory(outputShmId);
+
+            // Set up Ctrl+C handling
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                running.set(false);
+                CLib.INSTANCE.shmdt(inputShm.shmAddr());
+                CLib.INSTANCE.shmdt(outputShm.shmAddr());
+                System.out.println("Goodbye!");
+            }));
 
             // Get method name
             String method = getStrFromDriver(socketChannel);
