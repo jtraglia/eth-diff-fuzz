@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"net"
@@ -33,16 +32,6 @@ type Client struct {
 	ShmId     int
 	ShmBuffer []byte
 	Method    string
-}
-
-// generatePseudoRandomData generates pseudo-random data for testing.
-func generatePseudoRandomData(shmMaxSize int) []byte {
-	data := make([]byte, shmMaxSize)
-	_, err := rand.Read(data)
-	if err != nil {
-		panic("Failed to generate random data")
-	}
-	return data
 }
 
 // detachAndDelete detaches and deletes a shared memory region.
@@ -215,10 +204,25 @@ func main() {
 			continue
 		}
 
-		// Generate some input & throw it into the input buffer
-		inputSize := 10 * 1024 * 1024 // 50 MiB
-		input := generatePseudoRandomData(inputSize)
-		copy(inputShmBuffer, input)
+		// Generate a random state
+		state, err := GetRandomBeaconState()
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+		root, err := state.HashTreeRoot()
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+		sszState, err := state.MarshalSSZ()
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+
+		fmt.Printf("htr: %x, szz: %v bytes\n", root, len(sszState))
+		copy(inputShmBuffer, sszState)
 
 		mu.Lock()
 		wg := &sync.WaitGroup{}
@@ -231,7 +235,7 @@ func main() {
 
 				// Send the input size to the client
 				sizeBytes := make([]byte, 4)
-				binary.BigEndian.PutUint32(sizeBytes, uint32(inputSize))
+				binary.BigEndian.PutUint32(sizeBytes, uint32(len(sszState)))
 				_, err := client.Conn.Write([]byte(sizeBytes))
 				if err != nil {
 					if strings.Contains(err.Error(), "broken pipe") {
