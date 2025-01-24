@@ -194,7 +194,7 @@ func main() {
 		mu.Lock()
 		numClients := len(clients)
 		mu.Unlock()
-		if numClients < 1 {
+		if numClients < 2 {
 			fmt.Println("Waiting for 2+ clients...")
 			time.Sleep(1 * time.Second)
 			count = 0
