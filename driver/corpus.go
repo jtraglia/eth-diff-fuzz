@@ -11,47 +11,42 @@ import (
 	"github.com/golang/snappy"
 )
 
-func main() {
-	err := DownloadTestVectors()
+func InitializeCorpus() error {
+	err := DownloadTests()
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		return err
 	}
 
-	return
-
 	// Get list of forks
-	forks, err := listDirectories("tests/mainnet/")
+	forks, err := listDirectories("downloads/tests/mainnet/")
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		return err
 	}
 
 	// Populate pre states
 	for _, fork := range forks {
 		err = populateCorpus(fork, "BeaconState", ".*/(pre|post).ssz_snappy")
 		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
+			return err
 		}
 	}
 
 	// Populate static objects
 	for _, fork := range forks {
-		objects, err := listDirectories("tests/mainnet/" + fork + "/ssz_static/")
+		objects, err := listDirectories("downloads/tests/mainnet/" + fork + "/ssz_static/")
 		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
+			return err
 		}
 
 		for _, object := range objects {
 			err = populateCorpus(fork, object, "/"+object+"/.*.ssz_snappy")
 			if err != nil {
-				fmt.Println(err)
-				os.Exit(1)
+				return err
 			}
 		}
 	}
+
+	return nil
 }
 
 func listDirectories(path string) ([]string, error) {
@@ -82,7 +77,7 @@ func populateCorpus(fork string, object string, regexPattern string) error {
 	}
 
 	// Walk through the directory tree
-	err = filepath.WalkDir("tests/mainnet/"+fork, func(path string, d os.DirEntry, err error) error {
+	err = filepath.WalkDir("downloads/tests/mainnet/"+fork, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -139,7 +134,7 @@ func decompress(inputPath string, fork string, object string) (string, error) {
 	hashHex := fmt.Sprintf("%x", hash[:])
 
 	// Define the output file path
-	outputDir := fork + "files/" + object + "/"
+	outputDir := "corpus/" + fork + "/" + object + "/"
 	outputFileName := fmt.Sprintf("%s.ssz", hashHex)
 	outputFilePath := outputDir + outputFileName
 

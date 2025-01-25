@@ -64,9 +64,34 @@ func newSharedMemory(shmKey int) (int, []byte, error) {
 	return shmId, shmBuffer, nil
 }
 
+func directoryExists(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return info.IsDir(), nil
+}
+
 func main() {
 	mu := &sync.Mutex{}
 	clients := make(map[string]*Client)
+
+	// Initialize the corpus
+	corpusExists, err := directoryExists("corpus")
+	if err != nil {
+		fmt.Printf("Error checking if directory exists: %v\n", err)
+		os.Exit(1)
+	}
+	if !corpusExists {
+		err := InitializeCorpus()
+		if err != nil {
+			fmt.Printf("Error initializing corpus: %v\n", err)
+			os.Exit(1)
+		}
+	}
 
 	// Handle SIGINT for cleanup
 	signalChan := make(chan os.Signal, 1)
