@@ -39,26 +39,37 @@ func GetRandomBeaconState() (electra.BeaconState, error) {
 		return state, err
 	}
 
+	// genesis_time
 	err = tp.Fill(&state.GenesisTime)
 	if err != nil {
 		return state, err
 	}
+
+	// genesis_validators_root
 	err = tp.Fill(&state.GenesisValidatorsRoot)
 	if err != nil {
 		return state, err
 	}
+
+	// slot
 	err = tp.Fill(&state.Slot)
 	if err != nil {
 		return state, err
 	}
+
+	// fork
 	err = tp.Fill(&state.Fork)
 	if err != nil {
 		return state, err
 	}
+
+	// latest_block_header
 	err = tp.Fill(&state.LatestBlockHeader)
 	if err != nil {
 		return state, err
 	}
+
+	// block_roots
 	state.BlockRoots = make([]phase0.Root, 8192)
 	for i := range 8192 {
 		err = tp.Fill(&state.BlockRoots[i])
@@ -66,6 +77,8 @@ func GetRandomBeaconState() (electra.BeaconState, error) {
 			return state, err
 		}
 	}
+
+	// state_roots
 	state.StateRoots = make([]phase0.Root, 8192)
 	for i := range 8192 {
 		err = tp.Fill(&state.StateRoots[i])
@@ -73,23 +86,25 @@ func GetRandomBeaconState() (electra.BeaconState, error) {
 			return state, err
 		}
 	}
+
+	// historical_roots
 	err = tp.Fill(&state.HistoricalRoots)
 	if err != nil {
 		return state, err
 	}
 
+	// eth1_data
 	err = tp.Fill(&state.ETH1Data)
 	if err != nil {
 		return state, err
 	}
-	/* todo: blockhash really should be a [32]byte */
 	state.ETH1Data.BlockHash, err = tp.GetNBytes(32)
 	if err != nil {
 		return state, err
 	}
 
+	// eth1_data_votes
 	numETH1DataVotes, err := tp.GetUint()
-	// EPOCHS_PER_ETH1_VOTING_PERIOD * SLOTS_PER_EPOCH
 	numETH1DataVotes %= 64 * 32
 	state.ETH1DataVotes = make([]*phase0.ETH1Data, numETH1DataVotes)
 	for i := range numETH1DataVotes {
@@ -103,11 +118,13 @@ func GetRandomBeaconState() (electra.BeaconState, error) {
 		}
 	}
 
+	// eth1_deposit_index
 	err = tp.Fill(&state.ETH1DepositIndex)
 	if err != nil {
 		return state, err
 	}
 
+	// validators & balances
 	numValidators, err := tp.GetUint()
 	numValidators %= 10000 // 10k, arbitrary
 	state.Validators = make([]*phase0.Validator, numValidators)
@@ -128,9 +145,13 @@ func GetRandomBeaconState() (electra.BeaconState, error) {
 			return state, err
 		}
 
+		// Fix validator withdrawal type
+		state.Validators[i].WithdrawalCredentials[0] %= 3
+
 		// todo: make balances valid
 	}
 
+	// randao_mixes
 	state.RANDAOMixes = make([]phase0.Root, 65536)
 	for i := range 65536 {
 		err = tp.Fill(&state.RANDAOMixes[i])
@@ -139,17 +160,28 @@ func GetRandomBeaconState() (electra.BeaconState, error) {
 		}
 	}
 
+	// slashings
 	state.Slashings = make([]phase0.Gwei, 8192)
 	for i := range 8192 {
-		err = tp.Fill(&state.RANDAOMixes[i])
+		err = tp.Fill(&state.Slashings[i])
 		if err != nil {
 			return state, err
 		}
 	}
 
 	// previous_epoch_participation
-	// current_epoch_participation
+	err = tp.Fill(&state.PreviousEpochParticipation)
+	if err != nil {
+		return state, err
+	}
 
+	// current_epoch_participation
+	err = tp.Fill(&state.CurrentEpochParticipation)
+	if err != nil {
+		return state, err
+	}
+
+	// justification_bits
 	state.JustificationBits = make([]byte, 1)
 	for i := range 1 {
 		err = tp.Fill(&state.JustificationBits[i])
@@ -163,6 +195,7 @@ func GetRandomBeaconState() (electra.BeaconState, error) {
 	// finalized_checkpoint
 	// inactivity_scores
 
+	// current_sync_committee
 	err = tp.Fill(&state.CurrentSyncCommittee)
 	if err != nil {
 		return state, err
@@ -179,6 +212,7 @@ func GetRandomBeaconState() (electra.BeaconState, error) {
 		return state, err
 	}
 
+	// next_sync_committee
 	err = tp.Fill(&state.NextSyncCommittee)
 	if err != nil {
 		return state, err
@@ -195,6 +229,7 @@ func GetRandomBeaconState() (electra.BeaconState, error) {
 		return state, err
 	}
 
+	// latest_execution_payload_header
 	err = tp.Fill(&state.LatestExecutionPayloadHeader)
 	if err != nil {
 		return state, err
