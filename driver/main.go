@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/attestantio/go-eth2-client/spec/electra"
 	"github.com/gen2brain/shm"
 )
 
@@ -220,9 +221,14 @@ func main() {
 			fmt.Println(err)
 			continue
 		}
-
-		fmt.Printf("htr: %x, szz: %v bytes\n", root, len(sszState))
 		copy(inputShmBuffer, sszState)
+
+		// TODO: Instead of generating a beacon state from scratch, what we need to do is download
+		// all of the beacon states (and other objects) from consensus-spec-tests, then marshal to
+		// SSZ, the mutate that SSZ. Then we fuzz with that. More likely the inputs will be valid.
+
+		// The mutator doesn't have to be complicated. I wrote this for Teku a while back:
+		// https://github.com/Consensys/teku/blob/master/ethereum/spec/src/testFixtures/java/tech/pegasys/teku/spec/propertytest/util/Mutator.java
 
 		mu.Lock()
 		wg := &sync.WaitGroup{}
