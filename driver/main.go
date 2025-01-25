@@ -189,6 +189,9 @@ func main() {
 		}
 	}()
 
+	files, err := PopulateBeaconStateCorpus("electra")
+	fmt.Println(files, err)
+
 	for {
 		start := time.Now()
 

@@ -5,6 +5,7 @@ go 1.23.5
 require (
 	github.com/attestantio/go-eth2-client v0.22.1-0.20250106164842-07b6ce39bb43
 	github.com/gen2brain/shm v0.1.1
+	github.com/golang/snappy v0.0.4
 	github.com/trailofbits/go-fuzz-utils v0.0.0-20240830175354-474de707d2aa
 )
 
