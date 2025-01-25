@@ -6,6 +6,9 @@ import (
 	"sort"
 )
 
+// This file is a port of this mutator I made for teku:
+// https://github.com/Consensys/teku/blob/master/ethereum/spec/src/testFixtures/java/tech/pegasys/teku/spec/propertytest/util/Mutator.java
+
 // Mutation represents the types of mutations that can occur.
 type Mutation int
 

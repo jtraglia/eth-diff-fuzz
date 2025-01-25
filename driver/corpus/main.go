@@ -12,6 +12,14 @@ import (
 )
 
 func main() {
+	err := DownloadTestVectors()
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	return
+
 	// Get list of forks
 	forks, err := listDirectories("tests/mainnet/")
 	if err != nil {
@@ -131,7 +139,7 @@ func decompress(inputPath string, fork string, object string) (string, error) {
 	hashHex := fmt.Sprintf("%x", hash[:])
 
 	// Define the output file path
-	outputDir := fork + "/" + object + "/"
+	outputDir := fork + "files/" + object + "/"
 	outputFileName := fmt.Sprintf("%s.ssz", hashHex)
 	outputFilePath := outputDir + outputFileName
 
