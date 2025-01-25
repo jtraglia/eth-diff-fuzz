@@ -41,7 +41,7 @@ To run the driver:
 
 ```bash
 cd driver
-go run main.go
+go run .
 ```
 
 ## Processors
@@ -53,7 +53,7 @@ These must be run on the same system as the driver, but can be written in any pr
 
 ```bash
 cd processors/golang
-go run main.go
+go run .
 ```
 
 ### Java
