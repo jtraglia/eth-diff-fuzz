@@ -29,7 +29,7 @@ func GetRandomBeaconState() (electra.BeaconState, error) {
 		return state, err
 	}
 	// No nil fields
-	tp.SetParamsBiases(0, 0, 0, 0)
+	err = tp.SetParamsBiases(0, 0, 0, 0)
 	if err != nil {
 		return state, err
 	}
@@ -105,6 +105,9 @@ func GetRandomBeaconState() (electra.BeaconState, error) {
 
 	// eth1_data_votes
 	numETH1DataVotes, err := tp.GetUint()
+	if err != nil {
+		return state, err
+	}
 	numETH1DataVotes %= 64 * 32
 	state.ETH1DataVotes = make([]*phase0.ETH1Data, numETH1DataVotes)
 	for i := range numETH1DataVotes {
@@ -126,6 +129,9 @@ func GetRandomBeaconState() (electra.BeaconState, error) {
 
 	// validators & balances
 	numValidators, err := tp.GetUint()
+	if err != nil {
+		return state, err
+	}
 	numValidators %= 10000 // 10k, arbitrary
 	state.Validators = make([]*phase0.Validator, numValidators)
 	state.Balances = make([]phase0.Gwei, numValidators)
