@@ -13,7 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/attestantio/go-eth2-client/spec/electra"
 	"github.com/gen2brain/shm"
 )
 
@@ -211,7 +210,7 @@ func main() {
 			fmt.Println(err)
 			continue
 		}
-		root, err := state.HashTreeRoot()
+		_, err = state.HashTreeRoot()
 		if err != nil {
 			fmt.Println(err)
 			continue
@@ -229,6 +228,13 @@ func main() {
 
 		// The mutator doesn't have to be complicated. I wrote this for Teku a while back:
 		// https://github.com/Consensys/teku/blob/master/ethereum/spec/src/testFixtures/java/tech/pegasys/teku/spec/propertytest/util/Mutator.java
+
+		input := []byte("Hello, SSZ!")
+		seed := time.Now().UnixNano() // Use a random seed for each execution
+
+		mutated := Mutate(input, seed)
+		fmt.Printf("Original: %s\n", input)
+		fmt.Printf("Mutated:  %s\n", mutated)
 
 		mu.Lock()
 		wg := &sync.WaitGroup{}
