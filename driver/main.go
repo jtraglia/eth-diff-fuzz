@@ -214,6 +214,8 @@ func main() {
 		}
 	}()
 
+	var seed int64 = 0
+
 	for {
 		start := time.Now()
 
@@ -230,36 +232,21 @@ func main() {
 		}
 
 		// Generate a random state
-		state, err := GetRandomBeaconState()
+		state, err := Get("electra", "BeaconState", seed)
 		if err != nil {
 			fmt.Println(err)
 			continue
 		}
-		_, err = state.HashTreeRoot()
+
+		// Mutate the state
+		mutatedState := Mutate(state, seed)
 		if err != nil {
 			fmt.Println(err)
 			continue
 		}
-		sszState, err := state.MarshalSSZ()
-		if err != nil {
-			fmt.Println(err)
-			continue
-		}
-		copy(inputShmBuffer, sszState)
 
-		// TODO: Instead of generating a beacon state from scratch, what we need to do is download
-		// all of the beacon states (and other objects) from consensus-spec-tests, then marshal to
-		// SSZ, the mutate that SSZ. Then we fuzz with that. More likely the inputs will be valid.
-
-		// The mutator doesn't have to be complicated. I wrote this for Teku a while back:
-		// https://github.com/Consensys/teku/blob/master/ethereum/spec/src/testFixtures/java/tech/pegasys/teku/spec/propertytest/util/Mutator.java
-
-		input := []byte("Hello, SSZ!")
-		seed := time.Now().UnixNano() // Use a random seed for each execution
-
-		mutated := Mutate(input, seed)
-		fmt.Printf("Original: %s\n", input)
-		fmt.Printf("Mutated:  %s\n", mutated)
+		// Copy the mutated state into the input buffer
+		copy(inputShmBuffer, mutatedState)
 
 		mu.Lock()
 		wg := &sync.WaitGroup{}
@@ -272,7 +259,7 @@ func main() {
 
 				// Send the input size to the client
 				sizeBytes := make([]byte, 4)
-				binary.BigEndian.PutUint32(sizeBytes, uint32(len(sszState)))
+				binary.BigEndian.PutUint32(sizeBytes, uint32(len(mutatedState)))
 				_, err := client.Conn.Write([]byte(sizeBytes))
 				if err != nil {
 					if strings.Contains(err.Error(), "broken pipe") {
@@ -326,8 +313,10 @@ func main() {
 			}
 		}
 
+		//fmt.Printf("%x\n", first)
 		duration := time.Since(start)
 		totalTime += duration
 		count++
+		seed++
 	}
 }
