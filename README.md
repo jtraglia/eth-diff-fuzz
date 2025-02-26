@@ -1,6 +1,6 @@
-# eth-cl-fuzz
+# eth-diff-fuzz
 
-A fast & easy to maintain differential fuzzer for Ethereum consensus layer clients.
+A fast & easy to maintain differential fuzzer for Ethereum clients.
 
 ## System configuration
 

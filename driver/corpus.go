@@ -196,7 +196,7 @@ func populateCorpus(fork string, object string, regexPattern string) error {
 
 	// Print status
 	if len(files) == 0 {
-		fmt.Printf("No files %v.%v (pattern: %v)",
+		fmt.Printf("No files %v.%v (pattern: %v)\n",
 			fork, object, regexPattern)
 	} else {
 		fmt.Printf("Populated %v.%v (count: %v) (pattern: %v)\n",
