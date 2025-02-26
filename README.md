@@ -26,7 +26,7 @@ sudo sysctl -w kern.sysv.shmmax=104857600
 sudo sysctl -w kern.sysv.shmall=256000
 ```
 
-## Driver
+## Drivers
 
 The *driver* is the central component that communicates with *processors* (clients).
 
@@ -37,10 +37,10 @@ Some of the driver's responsibilities:
 * Generate random inputs to share with processors.
 * Check that processor responses are the same.
 
-To run the driver:
+To run a driver:
 
 ```bash
-cd driver
+cd drivers/consensus
 go run .
 ```
 
