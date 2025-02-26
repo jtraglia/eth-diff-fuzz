@@ -240,10 +240,6 @@ func main() {
 
 		// Mutate the state
 		mutatedState := Mutate(state, seed)
-		if err != nil {
-			fmt.Println(err)
-			continue
-		}
 
 		// Copy the mutated state into the input buffer
 		copy(inputShmBuffer, mutatedState)
@@ -313,7 +309,6 @@ func main() {
 			}
 		}
 
-		//fmt.Printf("%x\n", first)
 		duration := time.Since(start)
 		totalTime += duration
 		count++
