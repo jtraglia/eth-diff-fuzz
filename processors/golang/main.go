@@ -37,7 +37,7 @@ func processInput(method string, input []byte, is_execution bool, geth *types.Ge
 		// Return one of them to check against other clients
 		return gethOutput, gethErr
 	} else {
-		return nil, nil
+		return []byte{}, nil
 	}
 }
 

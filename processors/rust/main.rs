@@ -1,6 +1,5 @@
 use byteorder::{BigEndian, ByteOrder};
 use libc::{shmat, shmdt, MAP_FAILED};
-use ring::digest;
 use std::io::ErrorKind;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
@@ -10,14 +9,22 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
+use execution::types::reth::Reth;
+
 mod execution;
 
 const SOCKET_NAME: &str = "/tmp/eth-cl-fuzz";
 
-fn process_input(method: &str, input: &[u8]) -> Result<Vec<u8>, String> {
-    match method {
-        "sha" => Ok(digest::digest(&digest::SHA256, input).as_ref().to_vec()),
-        _ => Err(format!("Unknown method: '{}'", method)),
+fn process_input(method: &str, input: &[u8], is_execution: bool, reth: &Reth) -> Result<Vec<u8>, String> {
+    if is_execution {
+        // Handle precompile call
+        let result = reth.handle_precompile_call(method, input);
+        match result {
+            Ok(output) => Ok(output),
+            Err(e) => Err(e),
+        }
+    } else {
+        Ok(vec![])
     }
 }
 
@@ -69,6 +76,8 @@ fn main() {
     .expect("Error setting Ctrl+C handler");
     println!("Running... Press Ctrl+C to exit");
 
+    let reth = Reth::new();
+
     // The fuzzing loop
     while running.load(Ordering::SeqCst) {
         let mut input_size_buffer = [0u8; 4];
@@ -81,7 +90,7 @@ fn main() {
 
                 // Process the input in some way...
                 let start_time = Instant::now();
-                match process_input(method, input) {
+                match process_input(method, input, true, &reth) {
                     Ok(output) => {
                         // Copy the output to the shared memory
                         let output_shm: &mut [u8] =
