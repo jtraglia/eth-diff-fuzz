@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = [
+    "processors/rust",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["jtraglia, nethoxa"]
+description = "Processor for rust clients"
+
+[workspace.dependencies]
+byteorder = "1.4"
+ctrlc = "3.2"
+libc = "0.2"
+ring = "0.16"
+revm = "20.0.0-alpha.1"

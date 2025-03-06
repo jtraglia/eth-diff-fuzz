@@ -1,7 +1,9 @@
 [package]
-name = "shared_mem"
-version = "0.1.0"
-edition = "2021"
+name = "rust-processor"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
 
 [dependencies]
 byteorder = "1.4"
@@ -10,5 +12,5 @@ libc = "0.2"
 ring = "0.16"
 
 [[bin]]
-name = "shared_mem"
+name = "rust-processor"
 path = "main.rs"
