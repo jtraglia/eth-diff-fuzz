@@ -12,10 +12,33 @@ import (
 	"time"
 
 	"github.com/gen2brain/shm"
+
+	"github.com/jtraglia/eth-diff-fuzz/processors/golang/types"
+	"github.com/jtraglia/eth-diff-fuzz/processors/golang/execution/precompiles"
 )
 
-func processInput(method string, input []byte, is_execution bool) ([]byte, error) {
-	return nil, nil // [TODO: nethoxa]
+func processInput(method string, input []byte, is_execution bool, geth *types.Geth) ([]byte, error) {
+	if is_execution {
+		// Handle precompile call
+		gethPrecompile := (*precompiles.GethPrecompile)(geth)
+		gethOutput, gethErr := gethPrecompile.HandlePrecompileCall(method, input)
+
+		// [@todo nethoxa] Add erigon support
+		/*
+		   erigonPrecompile := (*precompiles.ErigonPrecompile)(erigon)
+		   erigonOutput, erigonErr := erigonPrecompile.HandlePrecompileCall(method, input)
+		
+			// Precompiles can return err, so we check even them match
+			if gethErr != erigonErr || slices.Compare(gethOutput, erigonOutput) != 0 {
+				return nil, fmt.Errorf("precompile call mismatch between geth and erigon: method %s, input %v", method, input)
+			}
+		*/
+
+		// Return one of them to check against other clients
+		return gethOutput, gethErr
+	} else {
+		return nil, nil
+	}
 }
 
 func main() {
@@ -70,6 +93,9 @@ func main() {
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
 	fmt.Println("Running... Press Ctrl+C to exit")
 
+	// Create clients instances
+	geth := types.Geth{}
+
 	// Fuzzing loop
 	for atomic.LoadInt32(&running) == 1 {
 		var inputSizeBytes [4]byte
@@ -98,7 +124,9 @@ func main() {
 
 			// Process the input
 			startTime := time.Now()
-			result, err := processInput(method, inputShm[:inputSize], true) // [TODO: nethoxa] true for testing
+
+			// [@todo nethoxa] is_execution = true for testing, consensus later
+			result, err := processInput(method, inputShm[:inputSize], true, &geth)
 
 			// Write result to output
 			if err != nil {
