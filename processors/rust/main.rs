@@ -10,6 +10,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
+mod execution;
+
 const SOCKET_NAME: &str = "/tmp/eth-cl-fuzz";
 
 fn process_input(method: &str, input: &[u8]) -> Result<Vec<u8>, String> {

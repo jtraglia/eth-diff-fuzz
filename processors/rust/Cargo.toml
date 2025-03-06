@@ -10,6 +10,7 @@ byteorder = "1.4"
 ctrlc = "3.2"
 libc = "0.2"
 ring = "0.16"
+revm = "20.0.0-alpha.1"
 
 [[bin]]
 name = "rust-processor"
