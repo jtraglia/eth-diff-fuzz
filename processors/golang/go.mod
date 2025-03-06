@@ -1,4 +1,4 @@
-module golang_processor
+module github.com/jtraglia/eth-diff-fuzz
 
 go 1.23.2
 
