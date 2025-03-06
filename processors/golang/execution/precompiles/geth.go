@@ -11,7 +11,7 @@ type GethPrecompile types.Geth
 func (g *GethPrecompile) HandlePrecompileCall(method string, input []byte) ([]byte, error) {
 	precompile := g.Precompiles[PrecompileToAddr[method]]
 	if precompile == nil {
-		return nil, fmt.Errorf("precompile not found")
+		return nil, fmt.Errorf("precompile not found: %s", method)
 	}
 
 	return precompile.Run(input)
