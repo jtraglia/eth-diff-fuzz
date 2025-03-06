@@ -12,62 +12,10 @@ import (
 	"time"
 
 	"github.com/gen2brain/shm"
-	"processor/execution/precompiles"
-)
-
-var (
-	geth = precompiles.Geth{}
 )
 
 func processInput(method string, input []byte, is_execution bool) ([]byte, error) {
-	if is_execution {
-		switch method {
-		case "ecrecover":
-			return geth.EcRecover(input)
-		case "sha256":
-			return geth.Sha256(input)
-		case "ripemd160":
-			return geth.Ripemd160(input)
-		case "dataCopy":
-			return geth.DataCopy(input)
-		case "bigModExp":
-			return []byte(fmt.Sprintf("%d", geth.BigModExp(input, false))), nil
-		case "modExp":
-			ret, err := geth.ModExp(input)
-			if err != nil {
-				return nil, err
-			}
-			return []byte(fmt.Sprintf("%d", ret)), nil
-		case "bn256Add":
-			return geth.Bn256Add(input)
-		case "bn256ScalarMul":
-			return geth.Bn256ScalarMul(input)
-		case "bn256Pairing":
-			return geth.Bn256Pairing(input)
-		case "blake2F":
-			return geth.Blake2F(input)
-		case "bls12381G1Add":
-			return geth.Bls12381G1Add(input)
-		case "bls12381G1MultiExp":
-			return geth.Bls12381G1MultiExp(input)
-		case "bls12381G2Add":
-			return geth.Bls12381G2Add(input)
-		case "bls12381G2MultiExp":
-			return geth.Bls12381G2MultiExp(input)
-		case "bls12381Pairing":
-			return geth.Bls12381Pariring(input)
-		case "bls12381MapG1":
-			return geth.Bls12381MapG1(input)
-		case "bls12381MapG2":
-			return geth.Bls12381MapG2(input)
-		case "kzg":
-			return geth.KzgPointEvaluation(input)
-		default:
-			return nil, fmt.Errorf("[TODO nethoxa] impl execution function set")
-		}
-	} else {
-		return nil, fmt.Errorf("[TODO nethoxa] impl consensus function set")
-	}
+	return nil, nil // [TODO: nethoxa]
 }
 
 func main() {
